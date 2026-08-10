@@ -16,9 +16,12 @@ The interface is mobile-first and expands into a focused desktop workspace. Scre
 - Repeated book names such as `001 - Drood.mp3` become distinct `Chapter 1`, `Chapter 2`, and later titles.
 - Editable chapter order, titles, book metadata, cover, and quality preset.
 - Select any number of `/input` books, including all of them, review them together, and enqueue the complete batch with one action.
-- A persistent strictly serial FIFO conversion queue with live progress, cancellation, restart recovery, job history, and owner-only downloads.
+- Review-by-exception preflight for chapter-number gaps, suspicious files, active or completed duplicates, output collisions, and destination capacity.
+- A persistent strictly serial FIFO conversion queue with live progress, learned finish-time estimates, cancellation, restart recovery, retryable failure history, and owner-only downloads.
+- Existing embedded book metadata and cover art are reused; batch conversion never invents missing descriptive metadata.
+- Completed validated results can be played through an authenticated native browser audio player.
 - Runtime validation of duration, chapter count, chapter titles, and title metadata.
-- One-time administrator setup, Argon2id passwords, revocable sessions, and CSRF protection.
+- One-time administrator setup, Argon2id passwords, revocable multi-device sessions, CSRF protection, and an explicitly Compose-gated one-use password recovery mode.
 - Six ishiku themes with light, dark, and system appearance.
 
 ## Supported areas
@@ -45,7 +48,7 @@ In another terminal, run `npm run dev:client` and open `http://localhost:5173`. 
 docker compose up -d
 ```
 
-The published Compose file pulls `ghcr.io/maroishiku/vertiku:latest` directly so ZimaOS does not need variable interpolation. To pin a deployment, replace the image value with a version tag or immutable digest. Open `http://localhost:8514`, complete first-run setup with the configured secret, then remove the `ISHIKU_SETUP_SECRET` line from the deployment after the administrator exists. A short ownership bootstrap runs as root at container start, then irrevocably drops to UID/GID 1000 with an empty capability set before the Vertiku process starts.
+The published Compose file pulls `ghcr.io/maroishiku/vertiku:latest` directly so ZimaOS does not need variable interpolation. To pin a deployment, replace the image value with a version tag or immutable digest. Open `http://localhost:8514` and complete first-run setup with the configured secret. Keep that secret configured and stored securely if you want Compose-gated password recovery to remain possible. A short ownership bootstrap runs as root at container start, then irrevocably drops to UID/GID 1000 with an empty capability set before the Vertiku process starts.
 
 ### ZimaOS
 
@@ -61,11 +64,15 @@ Each folder directly below the input path is treated as a separate audiobook. Th
 
 ## Volumes and folders
 
-`/data` is persistent and contains the database plus upload/browser-download storage. `/input` is a read-only source mount; Vertiku references those files in place and never moves, copies, or deletes them. `/output` is the default read-write destination. Vertiku encodes to a hidden partial file inside `/output`, validates it, and publishes it through a same-filesystem hard link, so no second 1 GB result is created in `/data`. Existing output files are never overwritten; Vertiku appends a counter. Uploaded source files are deleted from private application storage after a terminal job. The container root is read-only and `/tmp` is a size-bounded temporary filesystem.
+`/data` is persistent and contains the database plus upload/browser-download storage. `/input` is a read-only source mount; Vertiku references those files in place and never moves, copies, or deletes them. `/output` is the default read-write destination. Vertiku encodes to a hidden partial file inside `/output`, validates it, and publishes it through a same-filesystem hard link, so no second 1 GB result is created in `/data`. Existing output files are never overwritten; Vertiku appends a counter. Uploaded source files are deleted after success or cancellation; a retryable failure retains its upload until a retry succeeds so recovery does not require another 1 GB upload. The container root is read-only and `/tmp` is a size-bounded temporary filesystem.
 
 ## Environment variables
 
-See [.env.example](.env.example) for local development or an optional external-environment deployment. For Docker Compose or Portainer, copy it to the ignored `.env` file and replace the `environment:` mapping in a separate local Compose variant with `env_file: [.env]`. Important values are `ISHIKU_SETUP_SECRET`, `VERTIKU_DATA_DIR`, `VERTIKU_DATABASE_URL`, `VERTIKU_MAX_UPLOAD_GIB`, and `VERTIKU_COOKIE_SECURE`. Existing deployments may continue to use the legacy `VERTIKU_SETUP_SECRET` name. The primary ZimaOS `compose.yaml` always uses direct values instead. Conversion concurrency is intentionally fixed at one so large books never compete for CPU, memory, or disk throughput.
+See [.env.example](.env.example) for local development or an optional external-environment deployment. For Docker Compose or Portainer, copy it to the ignored `.env` file and replace the `environment:` mapping in a separate local Compose variant with `env_file: [.env]`. Important values are `ISHIKU_SETUP_SECRET`, `VERTIKU_PASSWORD_RESET`, `VERTIKU_DATA_DIR`, `VERTIKU_DATABASE_URL`, `VERTIKU_MAX_UPLOAD_GIB`, and `VERTIKU_COOKIE_SECURE`. Existing deployments may continue to use the legacy `VERTIKU_SETUP_SECRET` name. The primary ZimaOS `compose.yaml` always uses direct values instead. Conversion concurrency is intentionally fixed at one so large books never compete for CPU, memory, or disk throughput.
+
+### Password recovery
+
+Recovery is disabled by default. If the existing administrator password is lost, set `VERTIKU_PASSWORD_RESET: "true"` directly in Compose and restart Vertiku. The sign-in page then exposes a recovery form that requires the existing username, the configured setup secret, and a new password of at least 12 characters. A successful reset preserves the database, books, and jobs, revokes every existing session, and consumes recovery for that container start. Immediately return the value to `"false"` and restart Vertiku. Do not leave recovery enabled.
 
 ## Workers and engines
 
@@ -75,11 +82,11 @@ This milestone runs a local FFmpeg adapter in the core container. FFmpeg and ffp
 
 1. Select one or more audiobook folders below `/input`—including **Select all**—or select/drop local audio files and optionally add a cover.
 2. Vertiku probes and naturally sorts the files. Browser uploads are stored once until their job ends; `/input` files are referenced in place without an application-side copy.
-3. Review one book in detail or use the compact batch review to check all selected books together.
-4. Add book metadata and choose 64, 96, or 128 kbps AAC.
+3. Use the preflight status to select review-free books or inspect only exceptions. The compact batch review edits output filenames, quality, destination, and chapter titles without requiring descriptive metadata.
+4. For a single book, optionally edit metadata. Existing embedded metadata and cover art are reused when no override is supplied.
 5. Keep the default `/output` destination or choose an authenticated browser download.
 6. Start one job or enqueue the complete batch. The persistent FIFO queue always runs exactly one audiobook at a time, keeps working without an open browser, shows live position and progress, and supports cancellation.
-7. Vertiku publishes or offers the M4B only after validation succeeds. Interrupted running jobs return to the queue after restart.
+7. Vertiku publishes or offers the M4B only after validation succeeds. The native player becomes available at the same point. Interrupted running jobs return to the queue after restart, while retryable failures retain their attempt and can be queued again without blocking later books.
 
 There is no silence detection, transcription, online chapter lookup, media URL input, or hidden multi-stage conversion.
 

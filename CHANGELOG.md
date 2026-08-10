@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0 - 2026-08-10
+
+### Added
+
+- Added review-by-exception preflight, fast source fingerprints, duplicate and collision warnings, destination-capacity checks, and learned queue finish estimates.
+- Added owner-scoped retry jobs that preserve the failed attempt and retained source while the serial queue continues.
+- Added embedded metadata and cover reuse plus authenticated byte-range playback for completed validated M4B results.
+- Added a disabled-by-default, one-use-per-start Compose password-recovery mode requiring the existing username and setup secret.
+
+### Changed
+
+- Batch review now focuses on deterministic output filenames, quality, destination, and chapter titles without requiring users to enter missing descriptive metadata.
+- Removed the full-result memory read after validation so large M4B files are not loaded into Node.js memory.
+
+### Security
+
+- Password recovery is rate-limited, returns generic failures, audits outcomes without secrets, rehashes with Argon2id, and revokes all sessions.
+- Media playback and retry routes repeat owner authorization; mutations require CSRF proof and range requests are strictly validated.
+
 ## 0.2.0 - 2026-08-10
 
 ### Added

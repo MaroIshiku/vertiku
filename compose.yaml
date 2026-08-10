@@ -37,6 +37,7 @@ services:
       VERTIKU_INPUT_DIR: /input
       VERTIKU_OUTPUT_DIR: /output
       VERTIKU_COOKIE_SECURE: "false"
+      VERTIKU_PASSWORD_RESET: "false"
       VERTIKU_MAX_UPLOAD_GIB: "10"
     volumes:
       - type: bind
@@ -71,6 +72,9 @@ services:
         - container: VERTIKU_MAX_UPLOAD_GIB
           description:
             en_us: Maximum source-file size in GiB
+        - container: VERTIKU_PASSWORD_RESET
+          description:
+            en_us: Set to true only for one password-recovery restart, then return it to false
       ports:
         - container: "8080"
           description:
@@ -106,10 +110,10 @@ x-casaos:
   tips:
     before_install:
       en_us: Replace ISHIKU_SETUP_SECRET before first start. Input folders belong in /DATA/AppData/i_vertiku/Input and converted files are written to /DATA/AppData/i_vertiku/Output. Back up /DATA/AppData/i_vertiku/Data and Output before every update.
-  version: "0.2.0"
+  version: "0.3.0"
   update_at: "2026-08-10"
   release_notes:
-    en_us: Adds select-all batch review, context-aware chapter names, a strictly serial unattended queue, live job updates, and a new conversion activity signal.
+    en_us: Adds review-by-exception preflight, queue forecasts, safe failed-job retries, embedded metadata and cover reuse, validated result playback, and Compose-gated account recovery.
   website: https://github.com/MaroIshiku/vertiku
   repo: https://github.com/MaroIshiku/vertiku
   support: https://github.com/MaroIshiku/vertiku/issues

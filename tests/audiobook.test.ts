@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { bookMetadataFromFolderName, buildFfmetadata, chapterTitleFromFilename, chapterTitlesFromFilenames, naturalSort, safeDownloadName } from '../src/domain/audiobook.js';
-import { convertToM4b, probeAudio } from '../src/server/ffmpeg.js';
+import { convertToM4b, inspectAudio, probeAudio } from '../src/server/ffmpeg.js';
 
 const directories: string[] = [];
 afterEach(() => directories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true })));
@@ -38,11 +38,12 @@ describe.runIf(spawnSync('ffmpeg', ['-version'], { windowsHide: true }).status =
   it('creates and validates exactly one chapter per input file', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'vertiku-ffmpeg-')); directories.push(directory);
     const sources = [1, 2].map((number) => {
-      const path = join(directory, `Part${number}.wav`);
-      const created = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=${400 + number * 100}:duration=0.35`, '-c:a', 'pcm_s16le', '-y', path], { windowsHide: true });
+      const path = join(directory, `Part${number}.m4a`);
+      const created = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=${400 + number * 100}:duration=0.35`, ...(number === 1 ? ['-metadata', 'album=Embedded book', '-metadata', 'artist=Embedded author', '-metadata', 'genre=Audiobook'] : []), '-c:a', 'aac', '-y', path], { windowsHide: true });
       expect(created.status).toBe(0); return path;
     });
     const durations = await Promise.all(sources.map((path) => probeAudio('ffprobe', path)));
+    expect((await inspectAudio('ffprobe', sources[0]!)).metadata).toMatchObject({ title: 'Embedded book', author: 'Embedded author', genre: 'Audiobook' });
     const outputPath = join(directory, 'result.m4b');
     await convertToM4b({ ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe', outputPath, bitrateKbps: 64, metadata: { title: 'Synthetic book', author: 'Vertiku Tests' }, sources: sources.map((path, index) => ({ path, title: `Part ${index + 1}`, durationMs: durations[index]! })) });
     expect(readFileSync(outputPath).byteLength).toBeGreaterThan(1000);
