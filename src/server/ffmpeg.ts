@@ -60,6 +60,7 @@ export type ConversionInput = {
   embeddedCoverSourcePath?: string;
   outputPath: string;
   onProgress?: (progress: number) => void;
+  onPhase?: (phase: 'encoding_audio' | 'validating_output') => void;
   onChild?: (child: ChildProcessWithoutNullStreams) => void;
 };
 
@@ -90,6 +91,7 @@ export async function convertToM4b(input: ConversionInput): Promise<void> {
     '-c:a', 'aac', '-b:a', `${input.bitrateKbps}k`, '-movflags', '+faststart', output
   ];
   const totalMs = input.sources.reduce((sum, source) => sum + source.durationMs, 0);
+  input.onPhase?.('encoding_audio');
   await new Promise<void>((resolvePromise, reject) => {
     const child = spawn(input.ffmpegPath, args, { shell: false, windowsHide: true });
     input.onChild?.(child);
@@ -106,6 +108,7 @@ export async function convertToM4b(input: ConversionInput): Promise<void> {
     child.on('error', reject);
     child.on('close', (code, signal) => code === 0 ? resolvePromise() : reject(new Error(signal ? 'Conversion was cancelled.' : `FFmpeg failed (${code}): ${stderr}`)));
   });
+  input.onPhase?.('validating_output');
   const result = await runJson(input.ffprobePath, ['-v', 'error', '-show_entries', 'format=duration:format_tags=title,artist,album', '-show_chapters', '-of', 'json', output]);
   const duration = Number(result.format?.duration);
   const expectedDuration = totalMs / 1000;

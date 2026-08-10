@@ -110,10 +110,10 @@ x-casaos:
   tips:
     before_install:
       en_us: Replace ISHIKU_SETUP_SECRET before first start. Input folders belong in /DATA/AppData/i_vertiku/Input and converted files are written to /DATA/AppData/i_vertiku/Output. Back up /DATA/AppData/i_vertiku/Data and Output before every update.
-  version: "0.3.0"
+  version: "0.4.0"
   update_at: "2026-08-10"
   release_notes:
-    en_us: Adds review-by-exception preflight, queue forecasts, safe failed-job retries, embedded metadata and cover reuse, validated result playback, and Compose-gated account recovery.
+    en_us: Adds a persistent five-step conversion checklist, per-book runtime estimates, and an explicitly scoped full-queue completion forecast.
   website: https://github.com/MaroIshiku/vertiku
   repo: https://github.com/MaroIshiku/vertiku
   support: https://github.com/MaroIshiku/vertiku/issues

@@ -17,7 +17,7 @@ The interface is mobile-first and expands into a focused desktop workspace. Scre
 - Editable chapter order, titles, book metadata, cover, and quality preset.
 - Select any number of `/input` books, including all of them, review them together, and enqueue the complete batch with one action.
 - Review-by-exception preflight for chapter-number gaps, suspicious files, active or completed duplicates, output collisions, and destination capacity.
-- A persistent strictly serial FIFO conversion queue with live progress, learned finish-time estimates, cancellation, restart recovery, retryable failure history, and owner-only downloads.
+- A persistent strictly serial FIFO conversion queue with live progress, a five-step per-job checklist, separate current-book and full-queue finish estimates, cancellation, restart recovery, retryable failure history, and owner-only downloads.
 - Existing embedded book metadata and cover art are reused; batch conversion never invents missing descriptive metadata.
 - Completed validated results can be played through an authenticated native browser audio player.
 - Runtime validation of duration, chapter count, chapter titles, and title metadata.
@@ -85,7 +85,7 @@ This milestone runs a local FFmpeg adapter in the core container. FFmpeg and ffp
 3. Use the preflight status to select review-free books or inspect only exceptions. The compact batch review edits output filenames, quality, destination, and chapter titles without requiring descriptive metadata.
 4. For a single book, optionally edit metadata. Existing embedded metadata and cover art are reused when no override is supplied.
 5. Keep the default `/output` destination or choose an authenticated browser download.
-6. Start one job or enqueue the complete batch. The persistent FIFO queue always runs exactly one audiobook at a time, keeps working without an open browser, shows live position and progress, and supports cancellation.
+6. Start one job or enqueue the complete batch. The persistent FIFO queue always runs exactly one audiobook at a time, keeps working without an open browser, shows a five-step job checklist, reports the current book separately from the complete queue ETA, and supports cancellation.
 7. Vertiku publishes or offers the M4B only after validation succeeds. The native player becomes available at the same point. Interrupted running jobs return to the queue after restart, while retryable failures retain their attempt and can be queued again without blocking later books.
 
 There is no silence detection, transcription, online chapter lookup, media URL input, or hidden multi-stage conversion.

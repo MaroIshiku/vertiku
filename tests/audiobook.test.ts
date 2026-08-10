@@ -45,7 +45,9 @@ describe.runIf(spawnSync('ffmpeg', ['-version'], { windowsHide: true }).status =
     const durations = await Promise.all(sources.map((path) => probeAudio('ffprobe', path)));
     expect((await inspectAudio('ffprobe', sources[0]!)).metadata).toMatchObject({ title: 'Embedded book', author: 'Embedded author', genre: 'Audiobook' });
     const outputPath = join(directory, 'result.m4b');
-    await convertToM4b({ ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe', outputPath, bitrateKbps: 64, metadata: { title: 'Synthetic book', author: 'Vertiku Tests' }, sources: sources.map((path, index) => ({ path, title: `Part ${index + 1}`, durationMs: durations[index]! })) });
+    const phases: string[] = [];
+    await convertToM4b({ ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe', outputPath, bitrateKbps: 64, metadata: { title: 'Synthetic book', author: 'Vertiku Tests' }, sources: sources.map((path, index) => ({ path, title: `Part ${index + 1}`, durationMs: durations[index]! })), onPhase: (phase) => phases.push(phase) });
+    expect(phases).toEqual(['encoding_audio', 'validating_output']);
     expect(readFileSync(outputPath).byteLength).toBeGreaterThan(1000);
     const probed = spawnSync('ffprobe', ['-v', 'error', '-show_chapters', '-of', 'json', outputPath], { encoding: 'utf8', windowsHide: true });
     expect(probed.status).toBe(0); expect((JSON.parse(probed.stdout) as { chapters: unknown[] }).chapters).toHaveLength(2);
