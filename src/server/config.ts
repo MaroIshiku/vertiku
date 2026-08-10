@@ -2,6 +2,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 
+const setupSecretSchema = z.string().min(32).refine(
+  (secret) => !/^replace-with-/i.test(secret),
+  'Replace the published setup-secret placeholder with a unique value.'
+);
+
 const schema = z.object({
   HOST: z.string().default('0.0.0.0'),
   VERTIKU_PORT: z.coerce.number().int().min(1).max(65535).default(8080),
@@ -9,7 +14,8 @@ const schema = z.object({
   VERTIKU_INPUT_DIR: z.string().default('/input'),
   VERTIKU_OUTPUT_DIR: z.string().default('/output'),
   VERTIKU_DATABASE_URL: z.string().optional(),
-  VERTIKU_SETUP_SECRET: z.string().min(16).optional(),
+  ISHIKU_SETUP_SECRET: setupSecretSchema.optional(),
+  VERTIKU_SETUP_SECRET: setupSecretSchema.optional(),
   VERTIKU_SETUP_SECRET_FILE: z.string().optional(),
   VERTIKU_MAX_UPLOAD_GIB: z.coerce.number().positive().max(100).default(10),
   VERTIKU_MAX_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(8).default(1),
@@ -21,8 +27,8 @@ const schema = z.object({
 export function loadConfig(environment = process.env) {
   const value = schema.parse(environment);
   const setupSecret = value.VERTIKU_SETUP_SECRET_FILE
-    ? readFileSync(value.VERTIKU_SETUP_SECRET_FILE, 'utf8').trim()
-    : value.VERTIKU_SETUP_SECRET;
+    ? setupSecretSchema.parse(readFileSync(value.VERTIKU_SETUP_SECRET_FILE, 'utf8').trim())
+    : value.ISHIKU_SETUP_SECRET ?? value.VERTIKU_SETUP_SECRET;
   const databaseUrl = value.VERTIKU_DATABASE_URL?.replace(/^sqlite:\/\//, '');
   return {
     host: value.HOST,

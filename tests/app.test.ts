@@ -49,6 +49,16 @@ describe('platform and identity endpoints', () => {
     const wrong = await app.inject({ method: 'POST', url: '/api/session', payload: { username: 'admin', password: 'different-password' } });
     expect(unknown.statusCode).toBe(401); expect(wrong.statusCode).toBe(401); expect(unknown.json().message).toBe('Invalid credentials.'); expect(wrong.json().message).toBe('Invalid credentials.');
   });
+
+  it('rate-limits repeated filesystem-backed readiness checks', async () => {
+    const app = await testApp();
+    for (let request = 0; request < 60; request += 1) {
+      expect((await app.inject('/health/ready')).statusCode).toBe(200);
+    }
+    const limited = await app.inject('/health/ready');
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json()).toMatchObject({ code: 'RATE_LIMITED' });
+  });
 });
 
 describe('persistent conversion queue', () => {

@@ -1,0 +1,63 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/MaroIshiku/vertiku/security/vex/0.1.1",
+  "author": "MaroIshiku",
+  "timestamp": "2026-08-10T14:01:33Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2026-67215"
+      },
+      "timestamp": "2026-08-10T14:01:33Z",
+      "products": [
+        {
+          "@id": "pkg:docker/vertiku@0.1.1-local",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/cjson@1.7.18-3.1%2Bdeb13u1?os_distro=trixie&os_name=debian&os_version=13"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:docker/maroishiku/vertiku@v0.1.1?repository_url=ghcr.io",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/cjson@1.7.18-3.1%2Bdeb13u1?os_distro=trixie&os_name=debian&os_version=13"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The vulnerable cJSONUtils_ApplyPatches and cJSONUtils_ApplyPatchesCaseSensitive functions are not called by Vertiku or imported by FFmpeg's librist dependency. Vertiku also does not expose RIST or arbitrary network inputs."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-67216"
+      },
+      "timestamp": "2026-08-10T14:01:33Z",
+      "products": [
+        {
+          "@id": "pkg:docker/vertiku@0.1.1-local",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/cjson@1.7.18-3.1%2Bdeb13u1?os_distro=trixie&os_name=debian&os_version=13"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:docker/maroishiku/vertiku@v0.1.1?repository_url=ghcr.io",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/cjson@1.7.18-3.1%2Bdeb13u1?os_distro=trixie&os_name=debian&os_version=13"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The vulnerable cJSON_Compare function is not called by Vertiku or imported by FFmpeg's librist dependency. Vertiku only passes validated local filesystem paths to FFmpeg and does not expose RIST or arbitrary network inputs."
+    }
+  ]
+}
