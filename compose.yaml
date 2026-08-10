@@ -2,7 +2,7 @@
 # Before first start, replace the setup-secret fallback with a unique value.
 services:
   vertiku-permissions:
-    image: "${VERTIKU_IMAGE:-ghcr.io/maroishiku/vertiku:latest}"
+    image: ghcr.io/maroishiku/vertiku:latest
     user: "0:0"
     entrypoint: ["/bin/sh", "-c"]
     command:
@@ -25,7 +25,7 @@ services:
         target: /output
 
   vertiku:
-    image: "${VERTIKU_IMAGE:-ghcr.io/maroishiku/vertiku:latest}"
+    image: ghcr.io/maroishiku/vertiku:latest
     init: true
     restart: unless-stopped
     user: "1000:1000"
@@ -37,22 +37,22 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    cpus: "${VERTIKU_CPU_LIMIT:-4.0}"
-    mem_limit: "${VERTIKU_MEMORY_LIMIT:-4g}"
+    cpus: "4.0"
+    mem_limit: "4g"
     pids_limit: 512
     ports:
       - target: 8080
         published: "8514"
         protocol: tcp
     environment:
-      ISHIKU_SETUP_SECRET: "${ISHIKU_SETUP_SECRET:-REPLACE-WITH-A-UNIQUE-SECRET-OF-AT-LEAST-32-CHARACTERS}"
-      TZ: "${TZ:-Europe/Berlin}"
+      ISHIKU_SETUP_SECRET: "REPLACE-WITH-A-UNIQUE-SECRET-OF-AT-LEAST-32-CHARACTERS"
+      TZ: Europe/Berlin
       VERTIKU_DATA_DIR: /data
       VERTIKU_INPUT_DIR: /input
       VERTIKU_OUTPUT_DIR: /output
-      VERTIKU_COOKIE_SECURE: "${VERTIKU_COOKIE_SECURE:-false}"
-      VERTIKU_MAX_UPLOAD_GIB: "${VERTIKU_MAX_UPLOAD_GIB:-10}"
-      VERTIKU_MAX_CONCURRENT_JOBS: "${VERTIKU_MAX_CONCURRENT_JOBS:-1}"
+      VERTIKU_COOKIE_SECURE: "false"
+      VERTIKU_MAX_UPLOAD_GIB: "10"
+      VERTIKU_MAX_CONCURRENT_JOBS: "1"
     volumes:
       - type: bind
         source: /DATA/AppData/i_vertiku/Data
@@ -118,16 +118,16 @@ x-casaos:
     en_us: Convert local audiobook folders into validated M4B files
   description:
     en_us: Vertiku is a self-hosted audiobook converter with local input and output folders, browser uploads, metadata editing, and a persistent conversion queue.
-  icon: https://cdn.jsdelivr.net/gh/MaroIshiku/vertiku@main/public/icon-512.png
+  icon: https://cdn.jsdelivr.net/gh/MaroIshiku/vertiku@main/public/vertiku-icon.png
   index: /
   port_map: "8514"
   tips:
     before_install:
       en_us: Replace ISHIKU_SETUP_SECRET before first start. Input folders belong in /DATA/AppData/i_vertiku/Input and converted files are written to /DATA/AppData/i_vertiku/Output. Back up /DATA/AppData/i_vertiku/Data and Output before every update.
-  version: "0.1.1"
+  version: "0.1.2"
   update_at: "2026-08-10"
   release_notes:
-    en_us: Adds a ZimaOS-first Compose deployment, persistent local input and output folders, and route-specific rate limits.
+    en_us: Uses direct ZimaOS-compatible Compose values without interpolation variables.
   website: https://github.com/MaroIshiku/vertiku
   repo: https://github.com/MaroIshiku/vertiku
   support: https://github.com/MaroIshiku/vertiku/issues

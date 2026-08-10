@@ -43,11 +43,11 @@ In another terminal, run `npm run dev:client` and open `http://localhost:5173`. 
 docker compose up -d
 ```
 
-The published Compose file pulls the ZimaOS appliance tag from GHCR. Set `VERTIKU_IMAGE` to a version tag or immutable digest when you need a pinned deployment. Open `http://localhost:8514`, complete first-run setup with the configured secret, then remove the secret from the deployment environment after the administrator exists.
+The published Compose file pulls `ghcr.io/maroishiku/vertiku:latest` directly so ZimaOS does not need variable interpolation. To pin a deployment, replace both image values with the same version tag or immutable digest. Open `http://localhost:8514`, complete first-run setup with the configured secret, then remove the `ISHIKU_SETUP_SECRET` line from the deployment after the administrator exists.
 
 ### ZimaOS
 
-In ZimaOS 1.7 or newer, choose **Install a customized app**, open the YAML import, and paste the complete [`compose.yaml`](compose.yaml). Before installing, replace `REPLACE-WITH-A-UNIQUE-SECRET-OF-AT-LEAST-32-CHARACTERS` with your own random value directly in the Compose editor. Vertiku deliberately rejects the published placeholder. No `.env` file and no source build are required. Port `8514` must be free.
+In ZimaOS 1.7 or newer, choose **Install a customized app**, open the YAML import, and paste the complete [`compose.yaml`](compose.yaml). Before installing, replace `REPLACE-WITH-A-UNIQUE-SECRET-OF-AT-LEAST-32-CHARACTERS` with your own random value directly in the Compose editor. Vertiku deliberately rejects the published placeholder. The primary Compose contains direct scalar values and no `${...}` variables, `.env` dependency, or source build. Port `8514` must be free.
 
 The ZimaOS-ready defaults use these host folders:
 
@@ -63,7 +63,7 @@ Each folder directly below the input path is treated as a separate audiobook. Th
 
 ## Environment variables
 
-See [.env.example](.env.example). Important values are `ISHIKU_SETUP_SECRET`, `VERTIKU_IMAGE`, `VERTIKU_DATA_DIR`, `VERTIKU_DATABASE_URL`, `VERTIKU_MAX_UPLOAD_GIB`, `VERTIKU_MAX_CONCURRENT_JOBS`, and `VERTIKU_COOKIE_SECURE`. Existing deployments may continue to use the legacy `VERTIKU_SETUP_SECRET` name.
+See [.env.example](.env.example) for local development or an optional external-environment deployment. For Docker Compose or Portainer, copy it to the ignored `.env` file and replace the `environment:` mapping in a separate local Compose variant with `env_file: [.env]`. Important values are `ISHIKU_SETUP_SECRET`, `VERTIKU_DATA_DIR`, `VERTIKU_DATABASE_URL`, `VERTIKU_MAX_UPLOAD_GIB`, `VERTIKU_MAX_CONCURRENT_JOBS`, and `VERTIKU_COOKIE_SECURE`. Existing deployments may continue to use the legacy `VERTIKU_SETUP_SECRET` name. The primary ZimaOS `compose.yaml` always uses direct values instead.
 
 ## Workers and engines
 

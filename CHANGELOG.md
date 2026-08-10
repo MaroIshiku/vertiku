@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 - 2026-08-10
+
+### Changed
+
+- Replaced every interpolation variable in the primary ZimaOS Compose file with a direct scalar value so ZimaOS can import it without `.env` processing.
+- Kept the setup-secret placeholder directly editable in Compose and documented direct image pinning as an optional manual change.
+
 ## 0.1.1 - 2026-08-10
 
 ### Security
