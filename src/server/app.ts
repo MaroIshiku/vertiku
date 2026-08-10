@@ -335,7 +335,7 @@ export async function buildApp(options: AppOptions) {
   app.get('/health/ready', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (_request, reply) => {
     try { sqlite.prepare('SELECT 1').get(); return { status: 'ready', database: 'ok', storage: 'ok', input: existsSync(inputDir) ? 'mounted' : 'not-mounted', output: existsSync(outputDir) ? 'mounted' : 'not-mounted' }; } catch { return reply.code(503).send({ status: 'not-ready' }); }
   });
-  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.4.1', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
+  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.4.2', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
   app.get('/api/setup/status', async () => ({ required: Number((sqlite.prepare('SELECT COUNT(*) AS count FROM accounts').get() as { count: number }).count) === 0, passwordResetEnabled: passwordResetAvailable }));
 
   app.post('/api/setup', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
@@ -563,6 +563,22 @@ export async function buildApp(options: AppOptions) {
     reply.hijack(); reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
     const send = () => { if (!sessionIsActive(session)) { clearInterval(timer); reply.raw.end(); return; } const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ?').get(id, session.account_id) as JobRow | undefined; if (!row) return; reply.raw.write(`event: job\ndata: ${JSON.stringify(publicJob(row))}\n\n`); if (['completed', 'failed', 'cancelled'].includes(row.status)) { clearInterval(timer); reply.raw.end(); } };
     const timer = setInterval(send, 750); send(); request.raw.on('close', () => clearInterval(timer)); return reply;
+  });
+  app.post('/api/jobs/cancel-queued', async (request, reply) => {
+    const session = requireSession(request, reply, true); if (!session) return reply;
+    sqlite.exec('BEGIN IMMEDIATE');
+    let queued: Array<{ id: string; draft_id: string; output_path: string | null }> = [];
+    try {
+      queued = sqlite.prepare("SELECT id, draft_id, output_path FROM jobs WHERE owner_id = ? AND status = 'queued' ORDER BY created_at, id").all(session.account_id) as typeof queued;
+      sqlite.prepare("UPDATE jobs SET status = 'cancelled', error_code = NULL, error_message = NULL, finished_at = ?, updated_at = ? WHERE owner_id = ? AND status = 'queued'").run(Date.now(), Date.now(), session.account_id);
+      sqlite.exec('COMMIT');
+    } catch (error) { sqlite.exec('ROLLBACK'); throw error; }
+    for (const row of queued) {
+      try { if (row.output_path) await discardOutputWorkingPath(row.output_path); await cleanupUploadedDraft(row.draft_id); }
+      catch (error) { request.log.warn({ err: error, jobId: row.id }, 'Cancelled queue cleanup could not be completed'); }
+    }
+    workQueue.wake();
+    return reply.code(202).send({ cancelled: queued.length });
   });
   app.post('/api/jobs/:id/cancel', async (request, reply) => { const session = requireSession(request, reply, true); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare("SELECT id, draft_id, status, output_path FROM jobs WHERE id = ? AND owner_id = ? AND status IN ('queued','running')").get(id, session.account_id) as { id: string; draft_id: string; status: string; output_path: string | null } | undefined; if (!row) return reply.code(409).send({ code: 'JOB_NOT_CANCELLABLE', message: 'This job cannot be cancelled.', requestId: request.id }); sqlite.prepare("UPDATE jobs SET status = 'cancelled', error_code = NULL, error_message = NULL, updated_at = ? WHERE id = ?").run(Date.now(), id); if (row.status === 'queued') { if (row.output_path) await discardOutputWorkingPath(row.output_path); await cleanupUploadedDraft(row.draft_id); } children.get(id)?.kill('SIGTERM'); workQueue.wake(); return reply.code(202).send({ id, status: 'cancelled' }); });
   app.post('/api/jobs/:id/retry', async (request, reply) => {
