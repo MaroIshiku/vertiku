@@ -789,6 +789,13 @@ appspec:
     progress:
       required: true
       fallback_when_engine_has_no_progress: "indeterminate_with_elapsed_time"
+      audiobook_conversion_phases:
+        - "queued"
+        - "reading_sources"
+        - "preparing_output"
+        - "encoding_audio"
+        - "validating_output"
+      phase_persistence_required: true
       fields:
         - "phase"
         - "percentage_if_available"
@@ -1139,6 +1146,8 @@ appspec:
         estimated_remaining_time: true
         estimated_finish_time: true
         confidence_label_required: true
+        running_job_scope: "shown_in_job_details"
+        complete_queue_scope: "running_job_plus_every_queued_job"
     recipes_page:
       presentation:
         mobile: "rounded_recipe_cards"

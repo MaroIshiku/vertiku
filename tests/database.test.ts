@@ -29,7 +29,8 @@ describe('database upgrades', () => {
     expect(upgraded.sqlite.prepare('SELECT username FROM accounts WHERE id = 1').get()).toEqual({ username: 'admin' });
     expect(upgraded.sqlite.prepare('SELECT title, status FROM jobs WHERE id = ?').get('job-1')).toEqual({ title: 'Preserved Book', status: 'completed' });
     const jobColumns = (upgraded.sqlite.prepare('PRAGMA table_info(jobs)').all() as Array<{ name: string }>).map((column) => column.name);
-    expect(jobColumns).toEqual(expect.arrayContaining(['source_fingerprint', 'retry_of', 'retryable', 'started_at', 'finished_at']));
+    expect(jobColumns).toEqual(expect.arrayContaining(['phase', 'source_fingerprint', 'retry_of', 'retryable', 'started_at', 'finished_at']));
+    expect(upgraded.sqlite.prepare('SELECT phase FROM jobs WHERE id = ?').get('job-1')).toEqual({ phase: 'queued' });
     expect(upgraded.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'audit_events'").get()).toEqual({ name: 'audit_events' });
     upgraded.sqlite.close();
   });

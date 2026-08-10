@@ -152,10 +152,30 @@ button, .button { min-height: var(--touch-target-min); }
 .destination-switch small { color: var(--color-on-surface-muted); }
 
 .job-card, .about-card { max-inline-size: 720px; margin-inline: auto; text-align: center; }
+.job-summary { text-align: center; }
 .job-card h1, .about-card h1 { margin: var(--space-2) 0; font-size: var(--type-headline-medium-size); }
 .job-status, .about-card > p:not(.eyebrow), .fine-print { color: var(--color-on-surface-muted); line-height: var(--type-body-medium-line); }
 .job-card progress { inline-size: min(100%, 500px); block-size: 10px; margin: var(--space-5) 0 var(--space-2); }
-.job-card > strong { display: block; }
+.job-summary > strong { display: block; }
+.job-eta { inline-size: fit-content; margin: var(--space-4) auto 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--color-surface-soft); color: var(--color-on-surface); }
+.job-eta small { color: var(--color-on-surface-muted); }
+.job-checklist { margin-block-start: var(--space-6); padding: var(--space-4); border: 1px solid var(--color-outline); border-radius: var(--radius-lg); background: var(--color-surface-soft); text-align: start; }
+.job-checklist-heading { margin-block-end: var(--space-4); display: flex; align-items: end; justify-content: space-between; gap: var(--space-3); }
+.job-checklist-heading h2 { margin: 0; font-size: var(--type-title-large-size); }
+.job-checklist-heading > span { flex: 0 0 auto; color: var(--color-on-surface-muted); font-size: var(--type-label-medium-size); font-weight: 700; }
+.job-checklist ol { margin: 0; padding: 0; display: grid; gap: var(--space-2); list-style: none; }
+.job-checklist li { min-block-size: 72px; padding: var(--space-3); display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: var(--space-3); border: 1px solid transparent; border-radius: var(--radius-md); color: var(--color-on-surface-muted); }
+.job-checklist li.current { border-color: var(--color-primary); background: var(--color-surface-raised); color: var(--color-on-surface); }
+.job-checklist li.done { color: var(--color-on-surface); }
+.job-checklist li.stopped { border-color: var(--color-danger); background: var(--color-danger-container); color: var(--color-on-danger-container); }
+.stage-marker { inline-size: 36px; block-size: 36px; display: grid; place-items: center; border: 1px solid var(--color-outline); border-radius: var(--radius-pill); background: var(--color-surface); color: var(--color-on-surface-muted); font-weight: 800; }
+.done .stage-marker { border-color: transparent; background: var(--color-success-container); color: var(--color-on-success-container); }
+.current .stage-marker { border-color: transparent; background: var(--color-primary); color: var(--color-on-primary); }
+.stopped .stage-marker { border-color: transparent; background: var(--color-danger); color: var(--color-on-danger); }
+.job-checklist li > div { min-inline-size: 0; display: grid; gap: var(--space-1); }
+.job-checklist small { color: inherit; line-height: var(--type-body-medium-line); }
+.stage-state { inline-size: fit-content; margin-block-start: var(--space-1); padding: 2px var(--space-2); border-radius: var(--radius-pill); background: var(--color-primary-container); color: var(--color-on-primary-container); font-size: var(--type-label-medium-size); font-weight: 700; }
+.stopped .stage-state { background: var(--color-danger); color: var(--color-on-danger); }
 .result-player { margin-block-start: var(--space-5); padding: var(--space-4); display: grid; gap: var(--space-3); border: 1px solid var(--color-outline); border-radius: var(--radius-lg); background: var(--color-surface-soft); text-align: start; }
 .result-player h2 { margin: 0; font-size: var(--type-title-large-size); }
 .result-player audio { inline-size: 100%; min-block-size: 44px; accent-color: var(--color-primary); }
@@ -173,8 +193,15 @@ button, .button { min-height: var(--touch-target-min); }
 .job-list-state { flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-2); }
 .button-row { margin-block-start: var(--space-4); }
 .button-row.centered { justify-content: center; }
-.queue-forecast { margin-block-start: var(--space-2) !important; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--color-surface-soft); color: var(--color-on-surface) !important; }
+.queue-forecast { margin-block-start: var(--space-3); padding: var(--space-3); display: grid; gap: var(--space-1); border-radius: var(--radius-md); background: var(--color-surface-soft); color: var(--color-on-surface); }
+.queue-forecast p { margin: 0; }
+.queue-forecast p:first-child { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2); }
 .queue-forecast small { color: var(--color-on-surface-muted); }
+.job-groups { display: grid; gap: var(--space-6); }
+.job-group { display: grid; gap: var(--space-3); }
+.job-group-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding-inline: var(--space-1); }
+.job-group-heading h2 { margin: 0; font-size: 1.05rem; }
+.job-group-heading > span { min-inline-size: 30px; min-block-size: 30px; display: inline-grid; place-items: center; padding-inline: var(--space-2); border-radius: var(--radius-pill); background: var(--color-surface-soft); color: var(--color-on-surface-muted); font-size: .85rem; font-weight: 800; }
 .jobs-list { display: grid; gap: var(--space-2); }
 .jobs-list > button { inline-size: 100%; min-block-size: 64px; padding: var(--space-3) var(--space-4); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); text-align: start; border: 1px solid var(--color-outline); border-radius: var(--radius-md); background: var(--color-surface-raised); color: var(--color-on-surface); }
 .jobs-list span:first-child { display: grid; gap: var(--space-1); }
@@ -247,6 +274,9 @@ progress::-webkit-progress-value { background: var(--color-primary); border-radi
   .two-columns .full { grid-column: auto; }
   .destination-switch { grid-template-columns: 1fr; }
   .button-row > * { flex: 1; }
+  .job-checklist { padding: var(--space-3); }
+  .job-checklist-heading { align-items: start; flex-direction: column; }
+  .job-checklist li { padding-inline: var(--space-2); grid-template-columns: 40px minmax(0, 1fr); }
   .about-card dl div { grid-template-columns: 1fr; gap: var(--space-1); }
 }
 

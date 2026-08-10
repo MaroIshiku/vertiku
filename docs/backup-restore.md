@@ -4,4 +4,4 @@ Stop Vertiku, then back up the complete `/data` volume. It contains the SQLite d
 
 Before upgrading, create and test a backup, record the current image digest, and retain that image for rollback. Roll back by stopping the new image and starting the recorded image against the pre-upgrade data backup. Never copy a live SQLite database without a coordinated snapshot.
 
-Version 0.3.0 adds columns and an audit table through additive, idempotent SQLite migration statements. No media file is rewritten during migration. Rolling back to an older image must use the pre-upgrade `/data` backup even though older code normally ignores the additional columns.
+Versions 0.3.0 and 0.4.0 add columns and an audit table through additive, idempotent SQLite migration statements. Version 0.4.0 adds only the persisted job phase and does not rewrite media or existing rows beyond the safe default. Rolling back to an older image must use the pre-upgrade `/data` backup even though older code normally ignores the additional columns.

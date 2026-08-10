@@ -111,7 +111,7 @@ describe('persistent conversion queue', () => {
     const app = await buildApp({
       databasePath: join(dataDir, 'vertiku.sqlite'), dataDir, inputDir, outputDir, cookieSecure: false, setupSecret: 'synthetic-setup-secret-value', maxConcurrentJobs: 8,
       inspect: async (_binary, path) => ({ durationMs: 1_000, metadata: path.includes('Drood') ? { title: 'Embedded Drood', author: 'Embedded Author', narrator: '', year: '', genre: '', description: '' } : { title: '', author: '', narrator: '', year: '', genre: '', description: '' }, embeddedCover: false }),
-      convert: async (input) => { convertedMetadata.push(input.metadata); active += 1; maximumActive = Math.max(maximumActive, active); await new Promise<void>((resolve) => releases.push(resolve)); writeFileSync(input.outputPath, 'validated batch audiobook'); active -= 1; }
+      convert: async (input) => { convertedMetadata.push(input.metadata); active += 1; maximumActive = Math.max(maximumActive, active); input.onPhase?.('encoding_audio'); await new Promise<void>((resolve) => releases.push(resolve)); input.onPhase?.('validating_output'); writeFileSync(input.outputPath, 'validated batch audiobook'); active -= 1; }
     }); apps.push(app);
     const credentials = { username: 'admin', password: 'synthetic-password-123', setupSecret: 'synthetic-setup-secret-value' };
     await app.inject({ method: 'POST', url: '/api/setup', payload: credentials });
@@ -127,9 +127,17 @@ describe('persistent conversion queue', () => {
     const queued = await app.inject({ method: 'POST', url: '/api/jobs/from-input/batch', headers: { cookie, 'x-csrf-token': csrf }, payload: { items } });
     expect(queued.statusCode).toBe(202); expect(queued.json().accepted).toBe(2);
     expect((await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().queue).toMatchObject({ remainingJobs: 2, confidence: 'learning' });
-    await waitFor(() => releases.length === 1); expect(maximumActive).toBe(1); releases[0]!();
+    await waitFor(() => releases.length === 1); expect(maximumActive).toBe(1);
+    const liveQueue = (await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json() as { jobs: Array<{ id: string; status: string; phase: string; estimatedRemainingSeconds?: number; estimatedFinishAt?: string }>; queue: { remainingJobs: number; queuedJobs: number; estimatedRemainingSeconds: number; estimatedFinishAt?: string; currentJobId?: string; currentJobEstimatedRemainingSeconds?: number } };
+    const running = liveQueue.jobs.find((job) => job.status === 'running')!;
+    expect(running).toMatchObject({ phase: 'encoding_audio' });
+    expect(running.estimatedRemainingSeconds).toBeGreaterThan(0); expect(running.estimatedFinishAt).toBeTruthy();
+    expect(liveQueue.queue).toMatchObject({ remainingJobs: 2, queuedJobs: 1, currentJobId: running.id });
+    expect(liveQueue.queue.estimatedRemainingSeconds).toBeGreaterThan(liveQueue.queue.currentJobEstimatedRemainingSeconds ?? 0); expect(liveQueue.queue.estimatedFinishAt).toBeTruthy();
+    releases[0]!();
     await waitFor(() => releases.length === 2); expect(maximumActive).toBe(1); releases[1]!();
     await waitFor(async () => ((await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().jobs as Array<{ status: string }>).every((job) => job.status === 'completed'));
+    expect(((await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().jobs as Array<{ phase: string }>).every((job) => job.phase === 'completed')).toBe(true);
     expect(existsSync(join(inputDir, 'Dan Simmons - Drood', '001 - Drood.mp3'))).toBe(true);
     expect(readdirSync(join(dataDir, 'uploads'))).toHaveLength(0);
     expect(convertedMetadata).toContainEqual(expect.objectContaining({ title: 'Embedded Drood', author: 'Embedded Author' }));

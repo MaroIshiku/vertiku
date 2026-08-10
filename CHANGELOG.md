@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0 - 2026-08-10
+
+### Added
+
+- Added a persistent five-step checklist to every job detail: queued, reading source details, preparing output, encoding audio, and validating/publishing.
+- Added a per-job remaining-time estimate for the running audiobook and an explicitly scoped completion estimate for the entire active queue.
+
+### Changed
+
+- Job phases now come from persisted worker state instead of being inferred from a percentage threshold.
+- Queue estimates now report the running audiobook and every waiting audiobook separately, while retaining the learned server-confidence label.
+
 ## 0.3.0 - 2026-08-10
 
 ### Added

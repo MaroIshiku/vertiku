@@ -57,7 +57,9 @@ type Session = { token_hash: string; account_id: number; csrf: string; expires_a
 type DraftSource = { id: string; draft_id: string; original_name: string; storage_path: string; duration_ms: number; size_bytes: number; modified_at: number; sort_order: number };
 type StoredChapter = { sourceId: string; title: string };
 type StoredMetadata = { title: string; author: string; narrator: string; year: string; genre: string; description: string };
-type JobRow = { id: string; draft_id: string; owner_id: number; status: string; progress: number; title: string; destination: 'output' | 'download'; bitrate_kbps: 64 | 96 | 128; metadata_json: string; chapters_json: string; output_path: string | null; export_path: string | null; error_code: string | null; error_message: string | null; source_fingerprint: string | null; source_bytes: number; source_duration_ms: number; estimated_duration_ms: number; estimated_output_bytes: number; retry_of: string | null; retryable: number; started_at: number | null; finished_at: number | null; created_at: number; updated_at: number };
+type JobPhase = 'queued' | 'reading_sources' | 'preparing_output' | 'encoding_audio' | 'validating_output' | 'completed';
+type ForecastModel = { ratio: number; confidence: 'learning' | 'measured' };
+type JobRow = { id: string; draft_id: string; owner_id: number; status: string; phase: JobPhase; progress: number; title: string; destination: 'output' | 'download'; bitrate_kbps: 64 | 96 | 128; metadata_json: string; chapters_json: string; output_path: string | null; export_path: string | null; error_code: string | null; error_message: string | null; source_fingerprint: string | null; source_bytes: number; source_duration_ms: number; estimated_duration_ms: number; estimated_output_bytes: number; retry_of: string | null; retryable: number; started_at: number | null; finished_at: number | null; created_at: number; updated_at: number };
 
 export type AppOptions = {
   databasePath: string;
@@ -164,24 +166,30 @@ export async function buildApp(options: AppOptions) {
     return { ratio: Math.min(4, Math.max(0.01, processing / audio)), confidence: rows.length >= 3 ? 'measured' as const : 'learning' as const };
   }
 
-  function publicJob(row: JobRow) {
-    const position = row.status === 'queued' ? Number((sqlite.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status = 'queued' AND (created_at < ? OR (created_at = ? AND id <= ?))").get(row.created_at, row.created_at, row.id) as { count: number }).count) : undefined;
-    const phase = row.status === 'running' ? (row.progress === 0 ? 'preparing' : row.progress < 96 ? 'encoding' : 'validating') : row.status;
-    return { id: row.id, status: row.status, phase, progress: row.progress, queuePosition: position, title: row.title, destination: row.destination, outputName: row.export_path ? basename(row.export_path) : undefined, error: row.error_message ? { code: row.error_code, message: row.error_message, retryable: Boolean(row.retryable) } : undefined, downloadReady: row.status === 'completed' && row.destination === 'download', mediaReady: row.status === 'completed' && Boolean(row.output_path && existsSync(row.output_path)), retryable: row.status === 'failed' && Boolean(row.retryable), retryOf: row.retry_of ?? undefined, sourceDurationMs: row.source_duration_ms || row.estimated_duration_ms, estimatedOutputBytes: row.estimated_output_bytes, createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString() };
+  function estimatedRemainingMs(row: JobRow, learned: ForecastModel, now = Date.now()) {
+    const duration = row.source_duration_ms || row.estimated_duration_ms;
+    if (!['queued', 'running'].includes(row.status)) return 0;
+    if (row.status === 'running' && row.progress >= 10 && row.started_at) {
+      const elapsed = Math.max(1, now - row.started_at);
+      return Math.max(1_000, elapsed * (100 - Math.min(99, row.progress)) / Math.max(1, row.progress));
+    }
+    return Math.max(1_000, duration * learned.ratio);
   }
 
-  function queueSummary(ownerId: number) {
+  function publicJob(row: JobRow, learned: ForecastModel = learnedConversionRatio(row.owner_id)) {
+    const position = row.status === 'queued' ? Number((sqlite.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status = 'queued' AND (created_at < ? OR (created_at = ? AND id <= ?))").get(row.created_at, row.created_at, row.id) as { count: number }).count) : undefined;
+    const phase = row.status === 'completed' ? 'completed' : row.phase;
+    const remainingMs = row.status === 'running' ? estimatedRemainingMs(row, learned) : 0;
+    return { id: row.id, status: row.status, phase, progress: row.progress, queuePosition: position, title: row.title, destination: row.destination, outputName: row.export_path ? basename(row.export_path) : undefined, error: row.error_message ? { code: row.error_code, message: row.error_message, retryable: Boolean(row.retryable) } : undefined, downloadReady: row.status === 'completed' && row.destination === 'download', mediaReady: row.status === 'completed' && Boolean(row.output_path && existsSync(row.output_path)), retryable: row.status === 'failed' && Boolean(row.retryable), retryOf: row.retry_of ?? undefined, sourceDurationMs: row.source_duration_ms || row.estimated_duration_ms, estimatedOutputBytes: row.estimated_output_bytes, estimatedRemainingSeconds: remainingMs ? Math.max(1, Math.round(remainingMs / 1000)) : undefined, estimatedFinishAt: remainingMs ? new Date(Date.now() + remainingMs).toISOString() : undefined, estimateConfidence: learned.confidence, createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString() };
+  }
+
+  function queueSummary(ownerId: number, learned = learnedConversionRatio(ownerId)) {
     const rows = sqlite.prepare("SELECT * FROM jobs WHERE owner_id = ? AND status IN ('running','queued') ORDER BY created_at, id").all(ownerId) as JobRow[];
-    const learned = learnedConversionRatio(ownerId);
-    let remainingMs = 0;
-    for (const row of rows) {
-      const duration = row.source_duration_ms || row.estimated_duration_ms;
-      if (row.status === 'running' && row.progress > 1 && row.started_at) {
-        const elapsed = Date.now() - row.started_at;
-        remainingMs += elapsed * (100 - row.progress) / row.progress;
-      } else remainingMs += duration * learned.ratio;
-    }
-    return { remainingJobs: rows.length, estimatedRemainingSeconds: Math.max(0, Math.round(remainingMs / 1000)), estimatedFinishAt: rows.length ? new Date(Date.now() + remainingMs).toISOString() : undefined, confidence: learned.confidence };
+    const now = Date.now();
+    const remainingMs = rows.reduce((sum, row) => sum + estimatedRemainingMs(row, learned, now), 0);
+    const running = rows.find((row) => row.status === 'running');
+    const currentRemainingMs = running ? estimatedRemainingMs(running, learned, now) : 0;
+    return { remainingJobs: rows.length, queuedJobs: rows.filter((row) => row.status === 'queued').length, estimatedRemainingSeconds: Math.max(0, Math.round(remainingMs / 1000)), estimatedFinishAt: rows.length ? new Date(now + remainingMs).toISOString() : undefined, currentJobId: running?.id, currentJobEstimatedRemainingSeconds: running ? Math.max(1, Math.round(currentRemainingMs / 1000)) : undefined, currentJobEstimatedFinishAt: running ? new Date(now + currentRemainingMs).toISOString() : undefined, confidence: learned.confidence };
   }
 
   async function cleanupUploadedDraft(draftId: string) {
@@ -227,6 +235,7 @@ export async function buildApp(options: AppOptions) {
           return;
         }
       }
+      sqlite.prepare("UPDATE jobs SET phase = 'preparing_output', progress = 8, updated_at = ? WHERE id = ? AND status = 'running'").run(Date.now(), job.id);
       const totalDurationMs = rows.reduce((sum, row) => sum + row.duration_ms, 0);
       const resolvedMetadata: StoredMetadata = {
         title: metadata.title || firstInspection?.metadata.title || job.title,
@@ -248,14 +257,17 @@ export async function buildApp(options: AppOptions) {
         if (available < outputEstimate * 1.1) throw new JobFailure('OUTPUT_STORAGE_LOW', 'The destination does not have enough free space for the estimated result.', true);
       } catch (error) { if (error instanceof JobFailure) throw error; }
       sqlite.prepare('UPDATE jobs SET output_path = ?, updated_at = ? WHERE id = ?').run(workingPath, Date.now(), job.id);
+      sqlite.prepare("UPDATE jobs SET phase = 'encoding_audio', progress = 10, updated_at = ? WHERE id = ? AND status = 'running'").run(Date.now(), job.id);
       await (options.convert ?? convertToM4b)({
         ffmpegPath: options.ffmpegPath ?? 'ffmpeg', ffprobePath: options.ffprobePath ?? 'ffprobe', outputPath: workingPath, coverPath: draft.cover_path ?? undefined, bitrateKbps: job.bitrate_kbps,
         metadata: resolvedMetadata,
         embeddedCoverSourcePath: !draft.cover_path && firstInspection?.embeddedCover ? rows[0]?.storage_path : undefined,
         sources: chapters.map((chapter) => { const row = rowById.get(chapter.sourceId)!; return { path: row.storage_path, title: chapter.title, durationMs: row.duration_ms }; }),
-        onProgress: (progress) => sqlite.prepare("UPDATE jobs SET progress = ?, updated_at = ? WHERE id = ? AND status = 'running'").run(progress, Date.now(), job.id),
+        onProgress: (progress) => sqlite.prepare("UPDATE jobs SET phase = 'encoding_audio', progress = ?, updated_at = ? WHERE id = ? AND status = 'running'").run(Math.min(94, Math.max(10, Math.round(10 + progress * 0.84))), Date.now(), job.id),
+        onPhase: (phase) => sqlite.prepare("UPDATE jobs SET phase = ?, progress = ?, updated_at = ? WHERE id = ? AND status = 'running'").run(phase, phase === 'validating_output' ? 96 : 10, Date.now(), job.id),
         onChild: (child) => children.set(job.id, child)
       });
+      sqlite.prepare("UPDATE jobs SET phase = 'validating_output', progress = 96, updated_at = ? WHERE id = ? AND status = 'running'").run(Date.now(), job.id);
       const status = (sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(job.id) as { status: string } | undefined)?.status;
       if (status === 'cancelled') {
         if (workingPath) await discardOutputWorkingPath(workingPath);
@@ -264,12 +276,12 @@ export async function buildApp(options: AppOptions) {
       }
       const exportPath = job.destination === 'output' ? await publishOutputWorkingPath(workingPath, outputDir, safeDownloadName(job.title)) : null;
       const storedPath = exportPath ?? workingPath;
-      sqlite.prepare("UPDATE jobs SET status = 'completed', progress = 100, output_path = ?, export_path = ?, retryable = 0, finished_at = ?, updated_at = ? WHERE id = ?").run(storedPath, exportPath, Date.now(), Date.now(), job.id);
+      sqlite.prepare("UPDATE jobs SET status = 'completed', phase = 'completed', progress = 100, output_path = ?, export_path = ?, retryable = 0, finished_at = ?, updated_at = ? WHERE id = ?").run(storedPath, exportPath, Date.now(), Date.now(), job.id);
       sqlite.prepare("UPDATE jobs SET retryable = 0 WHERE draft_id = ? AND status = 'failed'").run(job.draft_id);
       await cleanupUploadedDraft(job.draft_id);
     } catch (error) {
       if (shuttingDown) {
-        sqlite.prepare("UPDATE jobs SET status = 'queued', progress = 0, error_code = NULL, error_message = NULL, updated_at = ? WHERE id = ? AND status = 'running'").run(Date.now(), job.id);
+        sqlite.prepare("UPDATE jobs SET status = 'queued', phase = 'queued', progress = 0, error_code = NULL, error_message = NULL, updated_at = ? WHERE id = ? AND status = 'running'").run(Date.now(), job.id);
         return;
       }
       const cancelled = (sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(job.id) as { status: string } | undefined)?.status === 'cancelled';
@@ -288,13 +300,13 @@ export async function buildApp(options: AppOptions) {
     try {
       const row = sqlite.prepare("SELECT id FROM jobs WHERE status = 'queued' ORDER BY created_at, id LIMIT 1").get() as { id: string } | undefined;
       if (!row) { sqlite.exec('COMMIT'); return undefined; }
-      const changed = sqlite.prepare("UPDATE jobs SET status = 'running', progress = 0, error_code = NULL, error_message = NULL, retryable = 0, started_at = ?, finished_at = NULL, updated_at = ? WHERE id = ? AND status = 'queued'").run(Date.now(), Date.now(), row.id);
+      const changed = sqlite.prepare("UPDATE jobs SET status = 'running', phase = 'reading_sources', progress = 2, error_code = NULL, error_message = NULL, retryable = 0, started_at = ?, finished_at = NULL, updated_at = ? WHERE id = ? AND status = 'queued'").run(Date.now(), Date.now(), row.id);
       sqlite.exec('COMMIT');
       return changed.changes === 1 ? row.id : undefined;
     } catch (error) { sqlite.exec('ROLLBACK'); throw error; }
   }
 
-  sqlite.prepare("UPDATE jobs SET status = 'queued', progress = 0, error_code = NULL, error_message = NULL, updated_at = ? WHERE status = 'running'").run(Date.now());
+  sqlite.prepare("UPDATE jobs SET status = 'queued', phase = 'queued', progress = 0, error_code = NULL, error_message = NULL, updated_at = ? WHERE status = 'running'").run(Date.now());
   const workQueue = createWorkQueue({ concurrency: 1, claim: claimQueuedJob, run: runQueuedJob });
 
   app.setErrorHandler((error, request, reply) => {
@@ -309,7 +321,7 @@ export async function buildApp(options: AppOptions) {
   app.get('/health/ready', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (_request, reply) => {
     try { sqlite.prepare('SELECT 1').get(); return { status: 'ready', database: 'ok', storage: 'ok', input: existsSync(inputDir) ? 'mounted' : 'not-mounted', output: existsSync(outputDir) ? 'mounted' : 'not-mounted' }; } catch { return reply.code(503).send({ status: 'not-ready' }); }
   });
-  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.3.0', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
+  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.4.0', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
   app.get('/api/setup/status', async () => ({ required: Number((sqlite.prepare('SELECT COUNT(*) AS count FROM accounts').get() as { count: number }).count) === 0, passwordResetEnabled: passwordResetAvailable }));
 
   app.post('/api/setup', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
@@ -520,12 +532,12 @@ export async function buildApp(options: AppOptions) {
     return sqlite.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as JobRow;
   }
 
-  app.get('/api/jobs', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; return { jobs: rows.map(publicJob), queue: queueSummary(session.account_id) }; });
+  app.get('/api/jobs', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const learned = learnedConversionRatio(session.account_id); return { jobs: rows.map((row) => publicJob(row, learned)), queue: queueSummary(session.account_id, learned) }; });
   app.get('/api/jobs/events', async (request, reply) => {
     const session = requireSession(request, reply); if (!session) return reply;
     reply.hijack(); reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
     let previous = '';
-    const send = () => { if (!sessionIsActive(session)) { clearInterval(timer); reply.raw.end(); return; } const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const data = JSON.stringify({ jobs: rows.map(publicJob), queue: queueSummary(session.account_id) }); if (data !== previous) { previous = data; reply.raw.write(`event: jobs\ndata: ${data}\n\n`); } };
+    const send = () => { if (!sessionIsActive(session)) { clearInterval(timer); reply.raw.end(); return; } const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const learned = learnedConversionRatio(session.account_id); const data = JSON.stringify({ jobs: rows.map((row) => publicJob(row, learned)), queue: queueSummary(session.account_id, learned) }); if (data !== previous) { previous = data; reply.raw.write(`event: jobs\ndata: ${data}\n\n`); } };
     const timer = setInterval(send, 750); send(); request.raw.on('close', () => clearInterval(timer)); return reply;
   });
   app.get('/api/jobs/:id', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ?').get(id, session.account_id) as JobRow | undefined; return row ? publicJob(row) : reply.code(404).send({ code: 'JOB_NOT_FOUND', message: 'The job was not found.', requestId: request.id }); });
@@ -549,7 +561,7 @@ export async function buildApp(options: AppOptions) {
     const failed = sqlite.prepare("SELECT * FROM jobs WHERE owner_id = ? AND status = 'failed' AND retryable = 1 ORDER BY created_at LIMIT 100").all(session.account_id) as JobRow[];
     const retried: JobRow[] = []; let skipped = 0;
     for (const row of failed) { try { retried.push(await retryFailedJob(row, session.account_id)); } catch { skipped += 1; } }
-    workQueue.wake(); return reply.code(202).send({ accepted: retried.length, skipped, jobs: retried.map(publicJob) });
+    workQueue.wake(); return reply.code(202).send({ accepted: retried.length, skipped, jobs: retried.map((row) => publicJob(row)) });
   });
   app.get('/api/jobs/:id/download', { config: { rateLimit: { max: 30, timeWindow: '5 minutes' } } }, async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare("SELECT * FROM jobs WHERE id = ? AND owner_id = ? AND status = 'completed' AND destination = 'download'").get(id, session.account_id) as JobRow | undefined; if (!row?.output_path || !existsSync(row.output_path)) return reply.code(404).send({ code: 'ARTIFACT_NOT_FOUND', message: 'The browser-download result is not available.', requestId: request.id }); reply.header('Content-Type', 'audio/mp4'); reply.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeDownloadName(row.title))}`); return reply.send(createReadStream(row.output_path)); });
   app.get('/api/jobs/:id/media', { config: { rateLimit: { max: 300, timeWindow: '5 minutes' } } }, async (request, reply) => {
