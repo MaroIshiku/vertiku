@@ -17,7 +17,7 @@ The interface is mobile-first and expands into a focused desktop workspace. Scre
 - Editable chapter order, titles, book metadata, cover, and quality preset.
 - Select any number of `/input` books, including all of them, review them together, and enqueue the complete batch with one action.
 - Review-by-exception preflight for chapter-number gaps, suspicious files, active or completed duplicates, output collisions, and destination capacity.
-- A persistent strictly serial FIFO conversion queue with live progress, a five-step per-job checklist, separate current-book and full-queue finish estimates, cancellation, restart recovery, retryable failure history, and owner-only downloads.
+- A persistent strictly serial FIFO conversion queue with live progress, a five-step per-job checklist, separate current-book and full-queue finish estimates, individual cancellation, confirmed cancellation of all waiting books without stopping the active conversion, restart recovery, retryable failure history, and owner-only downloads.
 - Existing embedded book metadata and cover art are reused; batch conversion never invents missing descriptive metadata.
 - Completed validated results can be played through an authenticated native browser audio player.
 - Runtime validation of duration, chapter count, chapter titles, and title metadata.

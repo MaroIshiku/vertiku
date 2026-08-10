@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.2 - 2026-08-10
+
+### Added
+
+- Added a confirmed jobs-overview action that atomically cancels all waiting audiobooks while the current conversion continues unchanged.
+
+### Security
+
+- The bulk cancellation mutation is owner-scoped, requires a valid session and CSRF proof, and never targets a running job.
+
 ## 0.4.1 - 2026-08-10
 
 ### Added

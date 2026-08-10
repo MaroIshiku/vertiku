@@ -114,10 +114,10 @@ x-casaos:
   tips:
     before_install:
       en_us: Replace ISHIKU_SETUP_SECRET before first start. Input folders belong in /DATA/AppData/i_vertiku/Input and converted files are written to /DATA/AppData/i_vertiku/Output. Back up /DATA/AppData/i_vertiku/Data and Output before every update.
-  version: "0.4.1"
+  version: "0.4.2"
   update_at: "2026-08-10"
   release_notes:
-    en_us: Makes full-queue ETA conservative and durable, adds one-use hardware recalibration, and improves Compose-secret recovery diagnostics.
+    en_us: Adds a confirmed jobs-overview action that cancels all waiting audiobooks without interrupting the running conversion.
   website: https://github.com/MaroIshiku/vertiku
   repo: https://github.com/MaroIshiku/vertiku
   support: https://github.com/MaroIshiku/vertiku/issues

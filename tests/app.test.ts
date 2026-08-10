@@ -219,6 +219,44 @@ describe('persistent conversion queue', () => {
     expect(existsSync(join(dataDir, 'results')) && readdirSync(join(dataDir, 'results')).length).toBe(0);
   });
 
+  it('cancels every waiting job atomically without interrupting the active conversion', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'vertiku-cancel-waiting-')); directories.push(dataDir);
+    const inputDir = join(dataDir, 'input'); const outputDir = join(dataDir, 'output');
+    for (const book of ['Active Book', 'Waiting Book']) {
+      mkdirSync(join(inputDir, book), { recursive: true });
+      writeFileSync(join(inputDir, book, '01.mp3'), `synthetic ${book}`);
+    }
+    const releases: Array<() => void> = [];
+    const app = await buildApp({
+      databasePath: join(dataDir, 'vertiku.sqlite'), dataDir, inputDir, outputDir, cookieSecure: false, setupSecret: 'synthetic-setup-secret-value',
+      probe: async () => 1_000,
+      convert: async (input) => { await new Promise<void>((resolve) => releases.push(resolve)); writeFileSync(input.outputPath, 'validated active audiobook'); }
+    }); apps.push(app);
+    const credentials = { username: 'admin', password: 'synthetic-password-123', setupSecret: 'synthetic-setup-secret-value' };
+    await app.inject({ method: 'POST', url: '/api/setup', payload: credentials });
+    const login = await app.inject({ method: 'POST', url: '/api/session', payload: { username: credentials.username, password: credentials.password } });
+    const cookie = `${login.cookies[0]!.name}=${login.cookies[0]!.value}`; const csrf = login.json().csrf as string; const headers = { cookie, 'x-csrf-token': csrf };
+    const enqueue = async (folderId: string) => {
+      const draft = (await app.inject({ method: 'POST', url: '/api/drafts/from-input', headers, payload: { folderId } })).json();
+      return app.inject({ method: 'POST', url: '/api/jobs', headers, payload: { draftId: draft.id, title: folderId, destination: 'output', bitrateKbps: 96, chapters: draft.sources.map((source: { id: string; title: string }) => ({ sourceId: source.id, title: source.title })) } });
+    };
+    const active = await enqueue('Active Book'); await waitFor(() => releases.length === 1);
+    const waiting = await enqueue('Waiting Book');
+
+    expect((await app.inject({ method: 'POST', url: '/api/jobs/cancel-queued', headers: { cookie }, payload: {} })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'POST', url: '/api/jobs/cancel-queued', headers, payload: {} })).json()).toEqual({ cancelled: 1 });
+    expect((await app.inject({ method: 'POST', url: '/api/jobs/cancel-queued', headers, payload: {} })).json()).toEqual({ cancelled: 0 });
+    let history = (await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().jobs as Array<{ id: string; status: string }>;
+    expect(history.find((job) => job.id === active.json().id)?.status).toBe('running');
+    expect(history.find((job) => job.id === waiting.json().id)?.status).toBe('cancelled');
+
+    releases[0]!();
+    await waitFor(async () => ((await app.inject({ method: 'GET', url: `/api/jobs/${active.json().id}`, headers: { cookie } })).json().status === 'completed'));
+    history = (await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().jobs as Array<{ id: string; status: string }>;
+    expect(history).toEqual(expect.arrayContaining([expect.objectContaining({ id: active.json().id, status: 'completed' }), expect.objectContaining({ id: waiting.json().id, status: 'cancelled' })]));
+    expect(releases).toHaveLength(1);
+  });
+
   it('retains failed sources, preserves the failed attempt, and retries only through an authorized mutation', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'vertiku-retry-')); directories.push(dataDir);
     const inputDir = join(dataDir, 'input'); const outputDir = join(dataDir, 'output'); mkdirSync(join(inputDir, 'Retry Book'), { recursive: true });
