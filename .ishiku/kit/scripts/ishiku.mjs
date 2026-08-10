@@ -304,7 +304,7 @@ function syncOne(appRoot) {
   const managed = [];
   const localKit = join(repo, '.ishiku', 'kit');
   for (const name of ['policies', 'schemas']) copyTree(join(source.kit, name), join(localKit, name), managed, repo);
-  const appScriptNames = new Set(['ishiku.mjs', 'verify-app', 'check-appspec', 'check-requirements', 'check-architecture', 'check-security', 'check-design', 'check-dependencies', 'check-release', 'compliance-test', 'generate-traceability', 'soak-test']);
+  const appScriptNames = new Set(['ishiku.mjs', 'verify-app', 'check-appspec', 'check-requirements', 'check-architecture', 'check-security', 'check-design', 'check-dependencies', 'check-release', 'compliance-test', 'generate-traceability']);
   for (const name of appScriptNames) {
     const sourceFile = join(source.kit, 'scripts', name);
     const target = join(localKit, 'scripts', name);

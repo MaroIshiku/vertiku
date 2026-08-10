@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "kit_version": "1.0.0",
+  "kit_version": "1.0.1",
   "application": { "id": "vertiku", "name": "Vertiku", "family": "ishiku", "type": "web_application" },
   "platform": { "profile": "standard-webapp", "authentication": "standard-account", "design_system": "ishiku-design-1", "security_baseline": "level-2", "locale": "en" },
-  "quality": { "default_risk_class": "C", "soak_test_required_for": [] },
+  "quality": { "default_risk_class": "C" },
   "updates": { "timezone": "Europe/Berlin", "weekly_schedule": { "day": "monday", "time": "05:00" } },
   "repository": { "default_branch": "main", "container_registry": "ghcr.io" },
   "verification": { "commands": [
