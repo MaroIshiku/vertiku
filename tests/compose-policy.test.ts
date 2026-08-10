@@ -9,6 +9,7 @@ describe('primary ZimaOS Compose policy', () => {
     expect(compose).not.toContain('${');
     expect(compose.match(/image: ghcr\.io\/maroishiku\/vertiku:latest/g)).toHaveLength(1);
     expect(compose).toContain('ISHIKU_SETUP_SECRET: "REPLACE-WITH-A-UNIQUE-SECRET-OF-AT-LEAST-32-CHARACTERS"');
+    expect(compose).toContain('VERTIKU_PASSWORD_RESET: "false"');
   });
 
   it('uses one persistent ZimaOS service and drops startup privileges before running Vertiku', () => {

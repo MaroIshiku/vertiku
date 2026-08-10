@@ -1,11 +1,13 @@
-import { existsSync, lstatSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { naturalSort } from '../domain/audiobook.js';
 
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus']);
 const COVER_NAMES = ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp', 'folder.jpg', 'folder.png'];
 
-export type InputBook = { id: string; title: string; pathLabel: string; fileCount: number; files: string[]; coverPath?: string };
+export type PreflightIssue = { code: string; severity: 'warning' | 'error'; message: string };
+export type InputBook = { id: string; title: string; pathLabel: string; fileCount: number; files: string[]; sourceBytes: number; fingerprint: string; issues: PreflightIssue[]; coverPath?: string };
 
 function safeEntries(directory: string) {
   try { return readdirSync(directory, { withFileTypes: true }); } catch { return []; }
@@ -31,7 +33,22 @@ export function scanInputBooks(root: string): InputBook[] {
     if (audioFiles.length) {
       const id = relative(rootPath, directory).replaceAll('\\', '/') || '.';
       const cover = COVER_NAMES.find((name) => entries.some((entry) => entry.isFile() && entry.name.toLowerCase() === name));
-      books.push({ id, title: id === '.' ? basename(rootPath) : basename(directory), pathLabel: id === '.' ? basename(rootPath) : id, fileCount: audioFiles.length, files: audioFiles, coverPath: cover ? resolve(directory, cover) : undefined });
+      const stats = audioFiles.flatMap((name) => {
+        try { return [{ name, stat: statSync(resolve(directory, name)) }]; } catch { return []; }
+      });
+      if (stats.length !== audioFiles.length) {
+        for (const entry of entries) if (entry.isDirectory() && !entry.isSymbolicLink()) visit(resolve(directory, entry.name));
+        return;
+      }
+      const fingerprint = createHash('sha256').update(stats.map(({ name, stat }) => `${name}\0${stat.size}\0${Math.trunc(stat.mtimeMs)}`).join('\n')).digest('hex');
+      const numbers = audioFiles.map((name) => Number(name.match(/^(?:\D*?)(\d{1,6})(?:\D|$)/)?.[1])).filter(Number.isFinite).sort((left, right) => left - right);
+      const numberSpan = numbers.length >= 2 ? numbers.at(-1)! - numbers[0]! + 1 : 0;
+      const missingNumbers = numberSpan > 0 && numberSpan <= 5_000 ? Array.from({ length: numberSpan }, (_value, index) => numbers[0]! + index).filter((number) => !numbers.includes(number)) : [];
+      const issues: PreflightIssue[] = [];
+      if (missingNumbers.length) issues.push({ code: 'CHAPTER_SEQUENCE_GAP', severity: 'warning', message: `Numbered filenames skip ${missingNumbers.slice(0, 5).join(', ')}${missingNumbers.length > 5 ? '…' : ''}.` });
+      if (numberSpan > 5_000) issues.push({ code: 'CHAPTER_SEQUENCE_RANGE', severity: 'warning', message: 'Chapter numbers span an unusually large range.' });
+      if (stats.some(({ stat }) => stat.size < 4096)) issues.push({ code: 'SUSPICIOUSLY_SMALL_SOURCE', severity: 'warning', message: 'At least one audio file is unusually small and may be incomplete.' });
+      books.push({ id, title: id === '.' ? basename(rootPath) : basename(directory), pathLabel: id === '.' ? basename(rootPath) : id, fileCount: audioFiles.length, files: audioFiles, sourceBytes: stats.reduce((sum, { stat }) => sum + stat.size, 0), fingerprint, issues, coverPath: cover ? resolve(directory, cover) : undefined });
     }
     for (const entry of entries) if (entry.isDirectory() && !entry.isSymbolicLink()) visit(resolve(directory, entry.name));
   };
@@ -41,7 +58,8 @@ export function scanInputBooks(root: string): InputBook[] {
 
 export function filesForInputBook(root: string, folderId: string) {
   const folder = resolveInputFolder(root, folderId); const entries = safeEntries(folder);
-  const files = naturalSort(entries.filter((entry) => entry.isFile() && AUDIO_EXTENSIONS.has(extname(entry.name).toLowerCase())).map((entry) => ({ name: entry.name, path: resolve(folder, entry.name) })), (file) => file.name);
+  const files = naturalSort(entries.filter((entry) => entry.isFile() && AUDIO_EXTENSIONS.has(extname(entry.name).toLowerCase())).map((entry) => { const path = resolve(folder, entry.name); const stat = statSync(path); return { name: entry.name, path, sizeBytes: stat.size, modifiedAt: Math.trunc(stat.mtimeMs) }; }), (file) => file.name);
   const coverName = COVER_NAMES.find((name) => entries.some((entry) => entry.isFile() && entry.name.toLowerCase() === name));
-  return { folder, files, coverPath: coverName ? resolve(folder, coverName) : undefined };
+  const fingerprint = createHash('sha256').update(files.map((file) => `${file.name}\0${file.sizeBytes}\0${file.modifiedAt}`).join('\n')).digest('hex');
+  return { folder, files, sourceBytes: files.reduce((sum, file) => sum + file.sizeBytes, 0), fingerprint, coverPath: coverName ? resolve(folder, coverName) : undefined };
 }

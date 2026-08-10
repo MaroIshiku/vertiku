@@ -1,9 +1,16 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import { buildFfmetadata, type AudiobookMetadata, type Chapter } from '../domain/audiobook.js';
 
-type ProbeResult = { format?: { duration?: string; tags?: Record<string, string> }; chapters?: Array<{ tags?: { title?: string } }> };
+type ProbeResult = {
+  format?: { duration?: string; tags?: Record<string, string> };
+  streams?: Array<{ codec_type?: string; disposition?: { attached_pic?: number }; tags?: Record<string, string> }>;
+  chapters?: Array<{ tags?: { title?: string } }>;
+};
+
+export type EmbeddedMetadata = { title: string; author: string; narrator: string; year: string; genre: string; description: string };
+export type AudioInspection = { durationMs: number; metadata: EmbeddedMetadata; embeddedCover: boolean };
 
 function runJson(binary: string, args: string[]): Promise<ProbeResult> {
   return new Promise((resolvePromise, reject) => {
@@ -18,11 +25,29 @@ function runJson(binary: string, args: string[]): Promise<ProbeResult> {
   });
 }
 
-export async function probeAudio(ffprobePath: string, path: string): Promise<number> {
-  const result = await runJson(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'json', path]);
+export async function inspectAudio(ffprobePath: string, path: string): Promise<AudioInspection> {
+  const result = await runJson(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration:format_tags:stream=codec_type:stream_disposition=attached_pic', '-of', 'json', path]);
   const seconds = Number(result.format?.duration);
   if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('Audio duration could not be read.');
-  return Math.round(seconds * 1000);
+  const tags = Object.fromEntries(Object.entries(result.format?.tags ?? {}).map(([key, value]) => [key.toLowerCase(), value.trim()]));
+  const first = (...keys: string[]) => keys.map((key) => tags[key]).find(Boolean) ?? '';
+  const rawYear = first('date', 'year');
+  return {
+    durationMs: Math.round(seconds * 1000),
+    metadata: {
+      title: first('album', 'title'),
+      author: first('album_artist', 'albumartist', 'artist', 'author'),
+      narrator: first('narrator', 'performer', 'composer'),
+      year: rawYear.match(/\b\d{4}\b/)?.[0] ?? '',
+      genre: first('genre'),
+      description: first('description', 'comment')
+    },
+    embeddedCover: Boolean(result.streams?.some((stream) => stream.codec_type === 'video' && stream.disposition?.attached_pic === 1))
+  };
+}
+
+export async function probeAudio(ffprobePath: string, path: string): Promise<number> {
+  return (await inspectAudio(ffprobePath, path)).durationMs;
 }
 
 export type ConversionInput = {
@@ -32,6 +57,7 @@ export type ConversionInput = {
   metadata: AudiobookMetadata;
   bitrateKbps: 64 | 96 | 128;
   coverPath?: string;
+  embeddedCoverSourcePath?: string;
   outputPath: string;
   onProgress?: (progress: number) => void;
   onChild?: (child: ChildProcessWithoutNullStreams) => void;
@@ -56,7 +82,11 @@ export async function convertToM4b(input: ConversionInput): Promise<void> {
     ...(input.coverPath ? ['-i', resolve(input.coverPath)] : []),
     '-filter_complex', `${filters};${concatInputs}concat=n=${input.sources.length}:v=0:a=1[audio]`,
     '-map', '[audio]', '-map_metadata', String(metadataIndex),
-    ...(input.coverPath ? ['-map', `${coverIndex}:v:0`, '-c:v', 'mjpeg', '-disposition:v:0', 'attached_pic', '-metadata:s:v:0', 'title=Cover'] : []),
+    ...(input.coverPath
+      ? ['-map', `${coverIndex}:v:0`, '-c:v', 'mjpeg', '-disposition:v:0', 'attached_pic', '-metadata:s:v:0', 'title=Cover']
+      : input.embeddedCoverSourcePath
+        ? ['-map', '0:v:0', '-c:v', 'mjpeg', '-disposition:v:0', 'attached_pic', '-metadata:s:v:0', 'title=Cover']
+        : []),
     '-c:a', 'aac', '-b:a', `${input.bitrateKbps}k`, '-movflags', '+faststart', output
   ];
   const totalMs = input.sources.reduce((sum, source) => sum + source.durationMs, 0);
@@ -84,7 +114,6 @@ export async function convertToM4b(input: ConversionInput): Promise<void> {
   const actualTitles = result.chapters?.map((chapter) => chapter.tags?.title ?? '') ?? [];
   if (actualTitles.some((title, index) => title !== chapters[index]?.title)) throw new Error('Result chapter-title validation failed.');
   if (result.format?.tags?.title !== input.metadata.title) throw new Error('Result metadata validation failed.');
-  await readFile(output);
   } finally {
     await rm(metadataPath, { force: true });
   }

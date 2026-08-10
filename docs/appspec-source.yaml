@@ -135,16 +135,12 @@ appspec:
         - "Docker-Deployment"
       optional:
         - "Hardwarebeschleunigung für FFmpeg"
-        - "Watchfolder in einfacher Form"
         - "Externe API-Tokens"
     version_1_1:
       label: "Automation"
       planned:
-        - "Watchfolder mit Regeln und Rezeptzuordnung"
         - "Öffentliche REST-API mit OpenAPI-Dokumentation"
         - "Persönliche API-Tokens"
-        - "Webhooks nach Jobabschluss"
-        - "Benachrichtigungen über Apprise-kompatible Endpunkte"
         - "Externe Worker"
         - "Jobprioritäten und Benutzerquoten"
     later:
@@ -629,9 +625,9 @@ appspec:
         high_quality: 128
       channel_default: "preserve_up_to_stereo"
       sample_rate_default: "preserve_when_supported"
-      copy_compatible_aac_without_reencode: true
+      copy_compatible_aac_without_reencode: false
       mixed_input_policy: "normalize_to_common_aac_profile"
-      optional_loudness_normalization: true
+      optional_loudness_normalization: false
       loudness_normalization_default: false
       preserve_source_gaps: true
       insert_additional_gaps_default: false
@@ -754,7 +750,6 @@ appspec:
       - "single_conversion"
       - "batch_conversion"
       - "merge_job"
-      - "watchfolder_job"
     states:
       - "draft"
       - "analyzing"
@@ -824,6 +819,10 @@ appspec:
 
   batch_processing:
     enabled_v1: true
+    metadata_policy:
+      embedded_values: "reuse_when_present"
+      missing_values: "do_not_require_or_invent_in_batch"
+      output_name_source: "sanitized_source_folder_name"
     modes:
       same_recipe_each_file:
         enabled: true
@@ -851,28 +850,9 @@ appspec:
         - "recipe"
 
   watchfolders:
-    enabled_v1: "optional"
-    full_support_version: "1.1"
-    model:
-      input_folder: "configured subpath under /imports"
-      recipe: "required"
-      output_folder: "configured subpath under /exports"
-      success_action:
-        default: "leave_source"
-        allowed:
-          - "leave_source"
-          - "move_to_processed"
-          - "delete_after_success"
-      failure_action:
-        default: "move_to_failed"
-      stability_delay_seconds_default: 10
-      recursive_default: true
-      ignore_hidden_files: true
-    safeguards:
-      - "Nur vollständig geschriebene, über einen Stabilitätszeitraum unveränderte Dateien verarbeiten."
-      - "Keine Endlosschleife zwischen Import- und Exportordner zulassen."
-      - "Dateien über Prüfsumme oder persistente Jobzuordnung deduplizieren."
-      - "Löschaktionen müssen vom Admin ausdrücklich aktiviert werden."
+    enabled_v1: false
+    full_support_version: "not_planned"
+    rationale: "Vertiku remains user-controlled and does not automatically enqueue or mutate mounted input folders."
 
   architecture:
     style: "modular_core_and_workers"
@@ -1017,13 +997,21 @@ appspec:
   authentication:
     required: true
     first_run:
-      setup_secret_environment_variable: "VERTIKU_SETUP_SECRET"
+      setup_secret_environment_variable: "ISHIKU_SETUP_SECRET"
       behavior:
         - "Bei leerer Benutzerdatenbank unmittelbar die Adminregistrierung anzeigen."
         - "Registrierung nur nach Eingabe des Setup-Secrets erlauben."
         - "Adminpasswort darf nicht dem Setup-Secret entsprechen."
         - "Setup-Secret niemals speichern oder in Logs ausgeben."
         - "Nach erfolgreicher Ersteinrichtung öffentliche Registrierung deaktivieren."
+    password_recovery:
+      enabled_environment_variable: "VERTIKU_PASSWORD_RESET"
+      default: false
+      requirements:
+        - "Existing username, setup secret, and a new password are required."
+        - "A successful reset disables recovery until the next process start."
+        - "All sessions are revoked without deleting user data or jobs."
+        - "Success and failure are audited without secrets."
     roles:
       admin:
         permissions:
@@ -1142,6 +1130,15 @@ appspec:
         - "In Exportordner speichern"
         - "Als Rezept speichern"
         - "Artefakte löschen"
+      validated_playback:
+        native_browser_audio: true
+        available_only_after_validation: true
+        owner_authorization_required: true
+      forecast:
+        remaining_jobs: true
+        estimated_remaining_time: true
+        estimated_finish_time: true
+        confidence_label_required: true
     recipes_page:
       presentation:
         mobile: "rounded_recipe_cards"
@@ -1206,7 +1203,6 @@ appspec:
       destructive_confirmations:
         - "Ergebnisdateien löschen"
         - "Rezept löschen"
-        - "Watchfolder-Quelldatei nach Erfolg löschen"
 
   accessibility:
     standard: "WCAG 2.2 AA"
@@ -1300,7 +1296,6 @@ appspec:
       - "workers"
       - "worker_capabilities"
       - "configured_folders"
-      - "watchfolders"
       - "app_settings"
       - "audit_events"
     file_storage:
@@ -1339,6 +1334,9 @@ appspec:
         VERTIKU_MAX_CONCURRENT_JOBS:
           default: 1
           maximum: 1
+        VERTIKU_PASSWORD_RESET:
+          default: false
+          description: "Explicit one-use recovery mode; return to false after success."
         VERTIKU_DEFAULT_RETENTION_HOURS:
           default: 24
         VERTIKU_LOG_LEVEL:
@@ -1630,7 +1628,6 @@ appspec:
         deliverables:
           - "Rezepte"
           - "Import- und Exportbrowser"
-          - "Optionale einfache Watchfolder"
       - phase: 7
         name: "Hardening"
         deliverables:

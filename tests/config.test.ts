@@ -21,4 +21,10 @@ describe('runtime configuration', () => {
   it('rejects parallel conversion workers because Vertiku is intentionally serial', () => {
     expect(() => loadConfig({ VERTIKU_MAX_CONCURRENT_JOBS: '2' })).toThrow();
   });
+
+  it('keeps password recovery disabled by default and accepts a case-insensitive Compose toggle', () => {
+    expect(loadConfig({}).passwordResetEnabled).toBe(false);
+    expect(loadConfig({ VERTIKU_PASSWORD_RESET: 'TRUE' }).passwordResetEnabled).toBe(true);
+    expect(() => loadConfig({ VERTIKU_PASSWORD_RESET: 'yes' })).toThrow();
+  });
 });

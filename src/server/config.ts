@@ -6,6 +6,7 @@ const setupSecretSchema = z.string().min(32).refine(
   (secret) => !/^replace-with-/i.test(secret),
   'Replace the published setup-secret placeholder with a unique value.'
 );
+const booleanString = z.string().transform((value) => value.toLowerCase()).pipe(z.enum(['true', 'false']));
 
 const schema = z.object({
   HOST: z.string().default('0.0.0.0'),
@@ -20,6 +21,7 @@ const schema = z.object({
   VERTIKU_MAX_UPLOAD_GIB: z.coerce.number().positive().max(100).default(10),
   VERTIKU_MAX_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(1).default(1),
   VERTIKU_COOKIE_SECURE: z.enum(['true', 'false']).default('false'),
+  VERTIKU_PASSWORD_RESET: booleanString.default('false'),
   FFMPEG_PATH: z.string().default('ffmpeg'),
   FFPROBE_PATH: z.string().default('ffprobe')
 });
@@ -39,6 +41,7 @@ export function loadConfig(environment = process.env) {
     databasePath: resolve(databaseUrl ?? `${value.VERTIKU_DATA_DIR}/vertiku.sqlite`),
     setupSecret,
     cookieSecure: value.VERTIKU_COOKIE_SECURE === 'true',
+    passwordResetEnabled: value.VERTIKU_PASSWORD_RESET === 'true',
     maxUploadBytes: value.VERTIKU_MAX_UPLOAD_GIB * 1024 ** 3,
     maxConcurrentJobs: value.VERTIKU_MAX_CONCURRENT_JOBS,
     ffmpegPath: value.FFMPEG_PATH,

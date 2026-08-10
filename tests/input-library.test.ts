@@ -24,4 +24,15 @@ describe('mounted input library', () => {
     const root = mkdtempSync(join(tmpdir(), 'vertiku-input-')); directories.push(root);
     expect(() => resolveInputFolder(root, '../outside')).toThrow(/escapes/);
   });
+
+  it('creates a fast change fingerprint and flags gaps in numbered chapter files', () => {
+    const root = mkdtempSync(join(tmpdir(), 'vertiku-input-')); directories.push(root);
+    const book = join(root, 'Book'); mkdirSync(book);
+    writeFileSync(join(book, '01 - Opening.mp3'), 'long-enough synthetic source');
+    writeFileSync(join(book, '03 - Ending.mp3'), 'long-enough synthetic source');
+    const first = scanInputBooks(root)[0]!;
+    expect(first.issues).toContainEqual(expect.objectContaining({ code: 'CHAPTER_SEQUENCE_GAP' }));
+    writeFileSync(join(book, '03 - Ending.mp3'), 'changed synthetic source bytes');
+    expect(scanInputBooks(root)[0]!.fingerprint).not.toBe(first.fingerprint);
+  });
 });
