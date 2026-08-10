@@ -8,9 +8,9 @@ const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); directories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true })); });
 
-async function testApp(setupSecret = 'synthetic-setup-secret-value') {
+async function testApp(setupSecret = 'synthetic-setup-secret-value', cookieSecure = false) {
   const dataDir = mkdtempSync(join(tmpdir(), 'vertiku-test-')); directories.push(dataDir);
-  const app = await buildApp({ databasePath: join(dataDir, 'vertiku.sqlite'), dataDir, cookieSecure: false, setupSecret }); apps.push(app); return app;
+  const app = await buildApp({ databasePath: join(dataDir, 'vertiku.sqlite'), dataDir, cookieSecure, setupSecret }); apps.push(app); return app;
 }
 
 async function waitFor(check: () => boolean | Promise<boolean>) {
@@ -27,6 +27,16 @@ describe('platform and identity endpoints', () => {
     expect((await app.inject('/health/live')).statusCode).toBe(200);
     expect((await app.inject('/health/ready')).json()).toMatchObject({ status: 'ready', database: 'ok', storage: 'ok' });
     expect((await app.inject('/api/setup/status')).json()).toEqual({ required: true });
+  });
+
+  it('only upgrades browser assets to HTTPS when secure-cookie mode is enabled', async () => {
+    const httpApp = await testApp();
+    const httpCsp = (await httpApp.inject('/')).headers['content-security-policy'];
+    expect(httpCsp).not.toContain('upgrade-insecure-requests');
+
+    const httpsApp = await testApp('synthetic-setup-secret-value', true);
+    const httpsCsp = (await httpsApp.inject('/')).headers['content-security-policy'];
+    expect(httpsCsp).toContain('upgrade-insecure-requests');
   });
 
   it('closes setup after creating the administrator and issues a revocable CSRF session', async () => {

@@ -84,7 +84,19 @@ export async function buildApp(options: AppOptions) {
   const children = new Map<string, ChildProcessWithoutNullStreams>();
   let shuttingDown = false;
   await app.register(cookie);
-  await app.register(helmet, { hsts: options.cookieSecure, contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], imgSrc: ["'self'", 'data:', 'blob:'], styleSrc: ["'self'"], scriptSrc: ["'self'"], connectSrc: ["'self'"] } } });
+  await app.register(helmet, {
+    hsts: options.cookieSecure,
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        imgSrc: ["'self'", 'data:', 'blob:'],
+        styleSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        connectSrc: ["'self'"],
+        upgradeInsecureRequests: options.cookieSecure ? [] : null,
+      },
+    },
+  });
   await app.register(rateLimit, { max: 120, timeWindow: '1 minute' });
   await app.register(multipart, { limits: { files: 501, fileSize: options.maxUploadBytes ?? 10 * 1024 ** 3, fields: 20, parts: 530 } });
 

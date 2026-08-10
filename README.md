@@ -43,7 +43,7 @@ In another terminal, run `npm run dev:client` and open `http://localhost:5173`. 
 docker compose up -d
 ```
 
-The published Compose file pulls `ghcr.io/maroishiku/vertiku:latest` directly so ZimaOS does not need variable interpolation. To pin a deployment, replace both image values with the same version tag or immutable digest. Open `http://localhost:8514`, complete first-run setup with the configured secret, then remove the `ISHIKU_SETUP_SECRET` line from the deployment after the administrator exists.
+The published Compose file pulls `ghcr.io/maroishiku/vertiku:latest` directly so ZimaOS does not need variable interpolation. To pin a deployment, replace the image value with a version tag or immutable digest. Open `http://localhost:8514`, complete first-run setup with the configured secret, then remove the `ISHIKU_SETUP_SECRET` line from the deployment after the administrator exists. A short ownership bootstrap runs as root at container start, then irrevocably drops to UID/GID 1000 with an empty capability set before the Vertiku process starts.
 
 ### ZimaOS
 
@@ -55,7 +55,7 @@ The ZimaOS-ready defaults use these host folders:
 - `/DATA/AppData/i_vertiku/Input` for read-only source folders
 - `/DATA/AppData/i_vertiku/Output` for converted M4B files
 
-Each folder directly below the input path is treated as a separate audiobook. The short-lived `vertiku-permissions` helper only assigns the data and output mount roots to the unprivileged application user; the Vertiku service itself still runs as the image's non-root `node` user.
+Each folder directly below the input path is treated as a separate audiobook. The single Vertiku service initializes the data and output mount ownership before dropping permanently to the unprivileged application user; no completed helper service remains for ZimaOS to track.
 
 ## Volumes and folders
 
