@@ -32,6 +32,18 @@ describe('database upgrades', () => {
     expect(jobColumns).toEqual(expect.arrayContaining(['phase', 'source_fingerprint', 'retry_of', 'retryable', 'started_at', 'finished_at']));
     expect(upgraded.sqlite.prepare('SELECT phase FROM jobs WHERE id = ?').get('job-1')).toEqual({ phase: 'queued' });
     expect(upgraded.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'audit_events'").get()).toEqual({ name: 'audit_events' });
+    expect(upgraded.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'conversion_samples'").get()).toEqual({ name: 'conversion_samples' });
+    upgraded.sqlite.prepare('UPDATE jobs SET source_bytes = ?, source_duration_ms = ?, started_at = ?, finished_at = ? WHERE id = ?').run(594 * 1024 ** 2, 10 * 60 * 60_000, 1_000, 121_000, 'job-1');
     upgraded.sqlite.close();
+
+    const reopened = openDatabase(path);
+    expect(reopened.sqlite.prepare('SELECT id, source_bytes, source_duration_ms, processing_ms FROM conversion_samples WHERE id = ?').get('job-1')).toEqual({ id: 'job-1', source_bytes: 594 * 1024 ** 2, source_duration_ms: 10 * 60 * 60_000, processing_ms: 120_000 });
+    reopened.sqlite.prepare("INSERT INTO system_settings (key, value) VALUES ('eta_history_reset_at', '122000')").run();
+    reopened.sqlite.prepare('DELETE FROM conversion_samples').run();
+    reopened.sqlite.close();
+
+    const afterReset = openDatabase(path);
+    expect(afterReset.sqlite.prepare('SELECT COUNT(*) AS count FROM conversion_samples').get()).toEqual({ count: 0 });
+    afterReset.sqlite.close();
   });
 });

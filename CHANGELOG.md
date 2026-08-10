@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.1 - 2026-08-10
+
+### Added
+
+- Added durable conversion-performance samples that remain useful when audiobook files no longer exist.
+- Added the one-use-per-value `VERTIKU_ETA_HISTORY_RESET_TOKEN` Compose control for recalibration after a hardware change.
+
+### Fixed
+
+- Replaced the optimistic full-queue ETA with source-byte projection, exact-duration evidence where available, a conservative historical percentile, and a minimum contribution from every queued audiobook.
+- Normalized accidental setup-secret copy whitespace during password recovery and added non-secret server diagnostics while retaining the same generic client denial.
+
+### Security
+
+- Recovery remains disabled by default, rate-limited, one-use per process start, generic to clients, fully session-revoking, and free of credential material in audit records and logs.
+
 ## 0.4.0 - 2026-08-10
 
 ### Added

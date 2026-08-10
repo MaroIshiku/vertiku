@@ -48,7 +48,7 @@ In another terminal, run `npm run dev:client` and open `http://localhost:5173`. 
 docker compose up -d
 ```
 
-The published Compose file pulls `ghcr.io/maroishiku/vertiku:latest` directly so ZimaOS does not need variable interpolation. To pin a deployment, replace the image value with a version tag or immutable digest. Open `http://localhost:8514` and complete first-run setup with the configured secret. Keep that secret configured and stored securely if you want Compose-gated password recovery to remain possible. A short ownership bootstrap runs as root at container start, then irrevocably drops to UID/GID 1000 with an empty capability set before the Vertiku process starts.
+The published Compose file pulls `ghcr.io/maroishiku/vertiku:latest` directly so ZimaOS does not need variable interpolation. To pin a deployment, replace the image value with a version tag or immutable digest. Open `http://localhost:8514` and complete first-run setup with the configured secret. Use at least 32 random letters, digits, hyphens, or underscores for `ISHIKU_SETUP_SECRET`; avoiding `$` prevents Docker Compose from interpreting part of the value as a variable. Keep that secret configured and stored securely if you want Compose-gated password recovery to remain possible. A short ownership bootstrap runs as root at container start, then irrevocably drops to UID/GID 1000 with an empty capability set before the Vertiku process starts.
 
 ### ZimaOS
 
@@ -68,11 +68,15 @@ Each folder directly below the input path is treated as a separate audiobook. Th
 
 ## Environment variables
 
-See [.env.example](.env.example) for local development or an optional external-environment deployment. For Docker Compose or Portainer, copy it to the ignored `.env` file and replace the `environment:` mapping in a separate local Compose variant with `env_file: [.env]`. Important values are `ISHIKU_SETUP_SECRET`, `VERTIKU_PASSWORD_RESET`, `VERTIKU_DATA_DIR`, `VERTIKU_DATABASE_URL`, `VERTIKU_MAX_UPLOAD_GIB`, and `VERTIKU_COOKIE_SECURE`. Existing deployments may continue to use the legacy `VERTIKU_SETUP_SECRET` name. The primary ZimaOS `compose.yaml` always uses direct values instead. Conversion concurrency is intentionally fixed at one so large books never compete for CPU, memory, or disk throughput.
+See [.env.example](.env.example) for local development or an optional external-environment deployment. For Docker Compose or Portainer, copy it to the ignored `.env` file and replace the `environment:` mapping in a separate local Compose variant with `env_file: [.env]`. Important values are `ISHIKU_SETUP_SECRET`, `VERTIKU_PASSWORD_RESET`, `VERTIKU_ETA_HISTORY_RESET_TOKEN`, `VERTIKU_DATA_DIR`, `VERTIKU_DATABASE_URL`, `VERTIKU_MAX_UPLOAD_GIB`, and `VERTIKU_COOKIE_SECURE`. Existing deployments may continue to use the legacy `VERTIKU_SETUP_SECRET` name. The primary ZimaOS `compose.yaml` always uses direct values instead. Conversion concurrency is intentionally fixed at one so large books never compete for CPU, memory, or disk throughput.
 
 ### Password recovery
 
-Recovery is disabled by default. If the existing administrator password is lost, set `VERTIKU_PASSWORD_RESET: "true"` directly in Compose and restart Vertiku. The sign-in page then exposes a recovery form that requires the existing username, the configured setup secret, and a new password of at least 12 characters. A successful reset preserves the database, books, and jobs, revokes every existing session, and consumes recovery for that container start. Immediately return the value to `"false"` and restart Vertiku. Do not leave recovery enabled.
+Recovery is disabled by default. If the existing administrator password is lost, set `VERTIKU_PASSWORD_RESET: "true"` directly in Compose and restart Vertiku. The sign-in page then exposes a recovery form that requires the existing username, the currently configured setup secret, and a new password of at least 12 characters. If an older secret contains `$` or its effective container value is uncertain, replace it with a new 32-character-or-longer value made from letters, digits, hyphens, and underscores before restarting; Compose-level access is already the recovery authority. A successful reset preserves the database, books, and jobs, revokes every existing session, and consumes recovery for that container start. Immediately return the value to `"false"` and restart Vertiku. Do not leave recovery enabled.
+
+### Queue estimate history
+
+Every successful conversion stores a small, durable performance measurement in SQLite. It contains byte count, audio duration, processing time, and timestamp—not audiobook content—and remains useful if the source or output file is later removed. The full-queue estimate uses a conservative percentile of these measurements and the sufficiently advanced active job, then projects every queued source byte. To discard measurements after moving the installation to materially different hardware, set `VERTIKU_ETA_HISTORY_RESET_TOKEN` to any new non-secret label such as `new-server-2026` and restart. Each distinct value resets once; leaving it unchanged across later restarts does not erase newly learned measurements.
 
 ## Workers and engines
 

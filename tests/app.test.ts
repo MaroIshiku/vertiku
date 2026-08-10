@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/server/app.js';
 
@@ -87,6 +88,36 @@ describe('platform and identity endpoints', () => {
     expect((await app.inject({ method: 'POST', url: '/api/session', payload: { username: 'admin', password: credentials.password } })).statusCode).toBe(401);
     expect((await app.inject({ method: 'POST', url: '/api/session', payload: { username: 'admin', password: 'replacement-password-123' } })).statusCode).toBe(200);
     expect((await app.inject({ method: 'POST', url: '/api/password-reset', payload: { username: 'admin', setupSecret: credentials.setupSecret, newPassword: 'another-password-123' } })).statusCode).toBe(403);
+  });
+
+  it('accepts copied setup-secret whitespace during recovery without exposing the denial reason', async () => {
+    const app = await testApp('synthetic-setup-secret-value', false, true);
+    await app.inject({ method: 'POST', url: '/api/setup', payload: { username: 'admin', password: 'synthetic-password-123', setupSecret: 'synthetic-setup-secret-value' } });
+    const reset = await app.inject({ method: 'POST', url: '/api/password-reset', payload: { username: 'admin', setupSecret: '  synthetic-setup-secret-value  ', newPassword: 'replacement-password-123' } });
+    expect(reset.statusCode).toBe(204);
+  });
+
+  it('clears persistent ETA measurements once per changed Compose reset token', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'vertiku-eta-reset-')); directories.push(dataDir);
+    const databasePath = join(dataDir, 'vertiku.sqlite');
+    const first = await buildApp({ databasePath, dataDir, cookieSecure: false, setupSecret: 'synthetic-setup-secret-value' });
+    await first.close();
+    let database = new DatabaseSync(databasePath);
+    database.prepare('INSERT INTO conversion_samples VALUES (?, ?, ?, ?, ?, ?)').run('sample-1', 1, 1000, 1000, 1000, 1000);
+    database.close();
+
+    const reset = await buildApp({ databasePath, dataDir, cookieSecure: false, setupSecret: 'synthetic-setup-secret-value', etaHistoryResetToken: 'new-hardware-2026' });
+    await reset.close();
+    database = new DatabaseSync(databasePath);
+    expect(database.prepare('SELECT COUNT(*) AS count FROM conversion_samples').get()).toEqual({ count: 0 });
+    database.prepare('INSERT INTO conversion_samples VALUES (?, ?, ?, ?, ?, ?)').run('sample-2', 1, 1000, 1000, 1000, 2000);
+    database.close();
+
+    const sameToken = await buildApp({ databasePath, dataDir, cookieSecure: false, setupSecret: 'synthetic-setup-secret-value', etaHistoryResetToken: 'new-hardware-2026' });
+    await sameToken.close();
+    database = new DatabaseSync(databasePath);
+    expect(database.prepare('SELECT COUNT(*) AS count FROM conversion_samples').get()).toEqual({ count: 1 });
+    database.close();
   });
 
   it('rate-limits repeated filesystem-backed readiness checks', async () => {

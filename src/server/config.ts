@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 
-const setupSecretSchema = z.string().min(32).refine(
+const setupSecretSchema = z.string().trim().min(32).refine(
   (secret) => !/^replace-with-/i.test(secret),
   'Replace the published setup-secret placeholder with a unique value.'
 );
@@ -22,6 +22,7 @@ const schema = z.object({
   VERTIKU_MAX_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(1).default(1),
   VERTIKU_COOKIE_SECURE: z.enum(['true', 'false']).default('false'),
   VERTIKU_PASSWORD_RESET: booleanString.default('false'),
+  VERTIKU_ETA_HISTORY_RESET_TOKEN: z.string().trim().max(200).optional(),
   FFMPEG_PATH: z.string().default('ffmpeg'),
   FFPROBE_PATH: z.string().default('ffprobe')
 });
@@ -42,6 +43,7 @@ export function loadConfig(environment = process.env) {
     setupSecret,
     cookieSecure: value.VERTIKU_COOKIE_SECURE === 'true',
     passwordResetEnabled: value.VERTIKU_PASSWORD_RESET === 'true',
+    etaHistoryResetToken: value.VERTIKU_ETA_HISTORY_RESET_TOKEN,
     maxUploadBytes: value.VERTIKU_MAX_UPLOAD_GIB * 1024 ** 3,
     maxConcurrentJobs: value.VERTIKU_MAX_CONCURRENT_JOBS,
     ffmpegPath: value.FFMPEG_PATH,
