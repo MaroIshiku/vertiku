@@ -1,0 +1,15 @@
+schema_version: 1
+id: DEC-0001
+title: Audiobook converter first milestone
+status: accepted
+date: 2026-08-10
+decision: >-
+  Implement the AppSpec first milestone as a single-process vertical slice with the standard
+  TypeScript, Fastify, React, SQLite/Drizzle account profile. FFmpeg and ffprobe are local
+  adapter binaries. Every input file becomes one chapter; there is no content-derived chaptering.
+risk_class: C
+compatibility:
+  - The detailed German source specification is retained at docs/appspec-source.yaml.
+  - Workspace policy requires English UI text and the six ishiku-design-1 themes; these override
+    the source document's German default and five legacy theme names.
+rollback: Remove the application deployment and its dedicated data volume; no earlier Vertiku data exists.

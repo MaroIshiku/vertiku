@@ -1,0 +1,1723 @@
+appspec:
+  schema_version: "1.0.0"
+  document_type: "application_specification"
+  language: "de"
+  status: "implementation_ready"
+
+  application:
+    id: "vertiku"
+    name: "Vertiku"
+    subtitle: "Alles ins richtige Format."
+    suite: "ishiku"
+    category: "self_hosted_file_conversion_hub"
+    deployment_model: "docker_self_hosted"
+    primary_icon:
+      family: "Material Symbols Rounded"
+      name: "conversion_path"
+      fallback_names:
+        - "swap_horiz"
+        - "transform"
+    summary: >-
+      Vertiku ist ein moderner, selbst gehosteter Any-to-Any-Dateikonverter.
+      Die Anwendung erkennt bereitgestellte Dateien, zeigt ausschließlich sinnvolle
+      und tatsächlich verfügbare Zielformate an und verarbeitet Konvertierungen
+      über modulare Conversion Engines. Vertiku bündelt Bild-, Audio-, Video-,
+      Dokument- und E-Book-Konvertierungen in einer einheitlichen Joboberfläche.
+    product_statement: >-
+      Vertiku macht etablierte Kommandozeilen-Konverter über eine ruhige,
+      verständliche Weboberfläche zugänglich, ohne deren technische Möglichkeiten
+      auf ein unübersichtliches Universalformular zu reduzieren.
+
+  design_system:
+    source_of_truth: "pixel_design.yaml"
+    name: "Pixel Soft Utility"
+    required: true
+    requirements:
+      - "Material 3 Expressive und Google-Pixel-inspirierte Oberflächen verwenden."
+      - "Mobile Ansichten müssen app-artig, Desktopansichten dashboard-artig wirken."
+      - "Die fünf Themes Lavender, Mint, Sky, Amber und Graphite unterstützen."
+      - "Je Theme die Modi System, Light und Dark unterstützen."
+      - "Theme und Modus lokal pro App speichern."
+      - "CSS Custom Properties und semantische Designtokens verwenden."
+      - "Keine feste Vertiku-Akzentfarbe definieren."
+      - "Technische Daten, Version, Build-Datum, Git-SHA und Logs nicht im Header anzeigen."
+      - "Mindestens 44 px große Touch-Ziele und sichtbare Fokuszustände verwenden."
+      - "prefers-reduced-motion respektieren."
+    local_storage_keys:
+      theme: "vertiku-theme"
+      mode: "vertiku-mode"
+      reduce_motion: "vertiku-reduce-motion"
+      last_source_mode: "vertiku-last-source-mode"
+
+  product_goals:
+    primary:
+      - id: "simple_conversion"
+        description: "Dateien ohne Kenntnis von Kommandozeilenparametern zuverlässig konvertieren."
+      - id: "meaningful_targets"
+        description: "Nur technisch und semantisch sinnvolle Zielformate anbieten."
+      - id: "modular_engines"
+        description: "Mehrere bewährte Konvertierungswerkzeuge über ein gemeinsames Adaptermodell integrieren."
+      - id: "transparent_jobs"
+        description: "Fortschritt, Warnungen, Fehler, Ausgaben und verwendete Engine nachvollziehbar darstellen."
+      - id: "repeatable_workflows"
+        description: "Wiederverwendbare Rezepte für häufige Konvertierungen anbieten."
+      - id: "self_hosted_privacy"
+        description: "Dateien vollständig auf der eigenen Infrastruktur verarbeiten."
+      - id: "safe_defaults"
+        description: "Verlässliche Presets anbieten und riskante oder verlustreiche Konvertierungen klar kennzeichnen."
+    secondary:
+      - "Stapelverarbeitung unterstützen."
+      - "Gemountete Import- und Exportordner unterstützen."
+      - "Später externe oder spezialisierte Worker anbinden können."
+      - "Eine stabile API für spätere Automatisierungen vorbereiten."
+
+  non_goals:
+    - id: "not_a_downloader"
+      description: "Vertiku ist kein Downloadmanager und ersetzt Pulliku nicht."
+    - id: "no_ytdlp_v1"
+      description: "yt-dlp, Medienseiten-URLs, Playlists, Kanäle und Downloadarchive sind nicht Teil von Version 1."
+    - id: "no_remote_url_import_v1"
+      description: "Beliebige Remote-URLs sind in Version 1 keine Eingabequelle."
+    - id: "not_a_media_library"
+      description: "Vertiku verwaltet keine dauerhafte Film-, Musik-, Bild- oder Hörbuchbibliothek."
+    - id: "not_a_full_editor"
+      description: "Vertiku ist weder Videoeditor, Bildbearbeitungsprogramm noch Desktop-Publishing-Anwendung."
+    - id: "no_drm_bypass"
+      description: "DRM-Umgehung und die Verarbeitung verschlüsselter, geschützter Medien werden nicht implementiert."
+    - id: "no_false_any_to_any_claim"
+      description: "Vertiku behauptet nicht, jede beliebige Datei verlustfrei in jedes beliebige Format umwandeln zu können."
+    - id: "no_hidden_conversion_paths"
+      description: "Mehrstufige oder verlustreiche Zwischenkonvertierungen dürfen nicht unbemerkt ausgeführt werden."
+
+  target_users:
+    - id: "self_hoster"
+      description: "Personen, die Dateien auf eigener Infrastruktur statt über externe Online-Konverter verarbeiten möchten."
+    - id: "home_server_user"
+      description: "Nutzer von Docker-, NAS- oder Homeserver-Systemen mit gemounteten Medien- und Dokumentordnern."
+    - id: "power_user"
+      description: "Nutzer, die häufige Konvertierungen als Rezepte oder Stapeljobs wiederholen möchten."
+    - id: "casual_user"
+      description: "Nutzer, die eine Datei hochladen, ein empfohlenes Zielformat auswählen und das Ergebnis herunterladen möchten."
+
+  terminology:
+    source: "Eine oder mehrere lokale Eingabedateien."
+    artifact: "Eine durch einen Job erzeugte Ausgabedatei."
+    job: "Ein einzelner Konvertierungsauftrag mit Quellen, Einstellungen und Ausgaben."
+    batch: "Mehrere voneinander unabhängige Konvertierungsjobs, die gemeinsam gestartet wurden."
+    merge_job: "Ein Job, der mehrere Quellen zu einer gemeinsamen Ausgabedatei zusammenführt."
+    engine: "Ein eingebundenes Konvertierungswerkzeug wie FFmpeg, ImageMagick oder LibreOffice."
+    adapter: "Die Vertiku-Komponente, die eine Engine kontrolliert und deren Fähigkeiten beschreibt."
+    worker: "Ein Prozess oder Container, der Jobs für eine oder mehrere Engines ausführt."
+    capability: "Eine von einem Worker registrierte mögliche Input-zu-Output-Konvertierung."
+    recipe: "Gespeicherte, wiederverwendbare Konvertierungseinstellungen."
+    preset: "Von Vertiku mitgelieferte, nicht zwingend dauerhaft gespeicherte Standardkonfiguration."
+
+  release_scope:
+    version_1_0:
+      label: "Core Conversion"
+      required:
+        - "Dateiupload über Browser"
+        - "Auswahl aus gemounteten Importordnern"
+        - "Ausgabe als Browserdownload"
+        - "Optionale Ablage in gemounteten Exportordnern"
+        - "Automatische Dateityp- und Medienanalyse"
+        - "Dynamische Anzeige verfügbarer Zielformate"
+        - "Bildkonvertierung"
+        - "Audio- und Videokonvertierung"
+        - "Dokumentkonvertierung"
+        - "Einfache E-Book-Konvertierung"
+        - "MP3- beziehungsweise Audio-Dateien zu M4B mit dateibasierten Kapiteln"
+        - "Jobqueue, Fortschritt, Abbruch, Wiederholung und Verlauf"
+        - "Stapelverarbeitung"
+        - "Rezepte"
+        - "Benutzerkonten und Adminbereich"
+        - "Automatische Aufräumregeln für temporäre Dateien"
+        - "Docker-Deployment"
+      optional:
+        - "Hardwarebeschleunigung für FFmpeg"
+        - "Watchfolder in einfacher Form"
+        - "Externe API-Tokens"
+    version_1_1:
+      label: "Automation"
+      planned:
+        - "Watchfolder mit Regeln und Rezeptzuordnung"
+        - "Öffentliche REST-API mit OpenAPI-Dokumentation"
+        - "Persönliche API-Tokens"
+        - "Webhooks nach Jobabschluss"
+        - "Benachrichtigungen über Apprise-kompatible Endpunkte"
+        - "Externe Worker"
+        - "Jobprioritäten und Benutzerquoten"
+    later:
+      label: "Extended Engines"
+      candidates:
+        - "OCR und PDF/A"
+        - "Untertitelkonvertierung"
+        - "Archivformate"
+        - "3D-Modelle"
+        - "Schriften"
+        - "Datenformate wie JSON, YAML, CSV und XML"
+        - "Freigegebene mehrstufige Konvertierungspfade"
+        - "Direkter HTTP-Dateiimport"
+        - "Optionaler yt-dlp-Quellenadapter"
+      constraints:
+        - "Ein späterer yt-dlp-Adapter darf nur als Eingangsquelle für eine Konvertierung dienen."
+        - "Ein späterer yt-dlp-Adapter darf Pullikus Downloadmanager-Funktionen nicht duplizieren."
+        - "Vertiku darf zu keiner Zeit von Pulliku abhängig sein."
+
+  source_management:
+    supported_sources_v1:
+      browser_upload:
+        enabled: true
+        requirements:
+          - "Drag-and-drop"
+          - "Mehrfachauswahl"
+          - "Ordnerauswahl über File System Access API oder webkitdirectory, sofern verfügbar"
+          - "Chunked Uploads für große Dateien"
+          - "Fortsetzbare Uploads, sofern technisch sinnvoll"
+          - "Uploadfortschritt"
+          - "Clientseitige Dateiliste vor dem Start"
+      mounted_import_folders:
+        enabled: true
+        mount_path_default: "/imports"
+        access_default: "read_only"
+        requirements:
+          - "Mehrere benannte Importquellen unterstützen"
+          - "Unterordner durchsuchen"
+          - "Suche und Filter"
+          - "Dateien nicht ohne explizite Konfiguration verschieben oder löschen"
+          - "Symlinks standardmäßig nicht verfolgen"
+      api_upload:
+        enabled_in_v1: false
+        planned_for: "1.1"
+    unsupported_sources_v1:
+      - "yt-dlp"
+      - "YouTube- oder Medienplattform-Links"
+      - "beliebige Remote-URLs"
+      - "Cloud-Storage-Provider"
+      - "Pulliku-Integration"
+
+  output_management:
+    supported_destinations:
+      browser_download:
+        enabled: true
+      mounted_export_folders:
+        enabled: true
+        mount_path_default: "/exports"
+        access_default: "read_write"
+        requirements:
+          - "Mehrere benannte Exportziele unterstützen"
+          - "Nur konfigurierte Unterpfade erlauben"
+          - "Dateinamenskonflikte sicher behandeln"
+          - "Überschreiben standardmäßig deaktivieren"
+      temporary_result_store:
+        enabled: true
+        mount_path_default: "/data/results"
+    filename_collision_policy:
+      default: "append_counter"
+      allowed:
+        - "append_counter"
+        - "append_timestamp"
+        - "replace_after_confirmation"
+        - "fail"
+    retention:
+      default_hours: 24
+      configurable_min_hours: 1
+      configurable_max_days: 30
+      pinned_results_supported: true
+      delete_source_upload_after_job: true
+      delete_import_source_after_job_default: false
+      secure_cleanup_best_effort: true
+    result_packaging:
+      multiple_outputs_default: "zip_download"
+      allow_individual_downloads: true
+
+  file_analysis:
+    required_tools:
+      - "libmagic oder gleichwertige MIME-Erkennung"
+      - "ffprobe für Audio und Video"
+      - "ExifTool für allgemeine Metadaten, sofern installiert"
+    principles:
+      - "Nicht ausschließlich Dateiendungen vertrauen."
+      - "Tatsächlichen MIME-Typ und Container ermitteln."
+      - "Beschädigte oder unvollständige Dateien vor Jobstart kennzeichnen."
+      - "Dateien niemals allein aufgrund ihres Namens als sicher einstufen."
+    extracted_properties:
+      common:
+        - "Dateiname"
+        - "Dateigröße"
+        - "MIME-Typ"
+        - "Erkannte Dateikategorie"
+        - "Prüfsumme"
+      media:
+        - "Container"
+        - "Codecs"
+        - "Dauer"
+        - "Bitrate"
+        - "Auflösung"
+        - "Bildrate"
+        - "Audio-Kanäle"
+        - "Abtastrate"
+        - "Untertitelspuren"
+        - "Kapitel"
+      images:
+        - "Breite"
+        - "Höhe"
+        - "Farbraum"
+        - "Bittiefe"
+        - "Animation"
+        - "Transparenz"
+        - "EXIF-Orientierung"
+      documents:
+        - "Seitenzahl, sofern ermittelbar"
+        - "Dokumenttyp"
+        - "Eingebettete Medien, sofern ermittelbar"
+      ebooks:
+        - "Titel"
+        - "Autor"
+        - "Cover"
+        - "Inhaltsverzeichnis"
+
+  capability_model:
+    source_of_truth: "worker_capability_registry"
+    behavior:
+      - "Jeder Worker registriert seine Engine-Versionen und verfügbaren Konvertierungskanten."
+      - "Die UI zeigt nur Zielformate an, für die aktuell ein gesunder Worker verfügbar ist."
+      - "Zielformate werden nicht als statische globale Liste implementiert."
+      - "Direkte Konvertierungen werden gegenüber mehrstufigen Pfaden bevorzugt."
+      - "Mehrstufige Pfade sind in Version 1 nur für ausdrücklich freigegebene Workflows erlaubt."
+    quality_classes:
+      lossless:
+        label: "Verlustfrei"
+        severity: "success"
+      remux:
+        label: "Ohne Neucodierung"
+        severity: "success"
+      lossy:
+        label: "Verlustbehaftet"
+        severity: "warning"
+      structure_loss_possible:
+        label: "Layout oder Struktur kann sich ändern"
+        severity: "warning"
+      metadata_loss_possible:
+        label: "Metadaten können verloren gehen"
+        severity: "info"
+      experimental:
+        label: "Experimentell"
+        severity: "danger"
+    recommendation_order:
+      - "recommended"
+      - "compatible"
+      - "additional"
+      - "experimental"
+    target_card_fields:
+      - "Formatname"
+      - "Dateiendung"
+      - "Kurzbeschreibung"
+      - "Qualitätsklasse"
+      - "Erwartete Kompatibilität"
+      - "Verwendete Engine"
+      - "Wichtige Verlustwarnung"
+
+  conversion_categories:
+    images:
+      enabled_v1: true
+      preferred_engine_order:
+        - "libvips"
+        - "ImageMagick"
+        - "Inkscape für SVG"
+      expected_input_formats:
+        - "png"
+        - "jpg"
+        - "jpeg"
+        - "webp"
+        - "avif"
+        - "heic"
+        - "heif"
+        - "tiff"
+        - "bmp"
+        - "gif"
+        - "ico"
+        - "svg"
+      expected_output_formats:
+        - "png"
+        - "jpg"
+        - "webp"
+        - "avif"
+        - "tiff"
+        - "bmp"
+        - "gif"
+        - "ico"
+        - "pdf"
+      notes:
+        - "Unterstützung hängt von den tatsächlich installierten Codec-Bibliotheken ab."
+        - "Raster-zu-SVG wird nicht als normale verlustfreie Konvertierung angeboten."
+        - "Animationen dürfen nicht stillschweigend auf ein Einzelbild reduziert werden."
+      options:
+        - "Qualität"
+        - "Zielbreite und Zielhöhe"
+        - "Seitenverhältnis beibehalten"
+        - "Zuschneiden oder einpassen"
+        - "Hintergrundfarbe bei Transparenzverlust"
+        - "Metadaten behalten oder entfernen"
+        - "Automatisch anhand EXIF drehen"
+        - "Farbraum"
+    audio:
+      enabled_v1: true
+      preferred_engine_order:
+        - "FFmpeg"
+      expected_input_formats:
+        - "mp3"
+        - "flac"
+        - "wav"
+        - "m4a"
+        - "aac"
+        - "ogg"
+        - "opus"
+        - "wma"
+        - "aiff"
+      expected_output_formats:
+        - "mp3"
+        - "flac"
+        - "wav"
+        - "m4a"
+        - "aac"
+        - "ogg"
+        - "opus"
+        - "m4b"
+      options:
+        - "Codec"
+        - "Bitrate oder Qualitätsstufe"
+        - "Abtastrate"
+        - "Kanäle"
+        - "Lautstärkenormalisierung"
+        - "Metadaten übernehmen"
+        - "Cover übernehmen"
+    video:
+      enabled_v1: true
+      preferred_engine_order:
+        - "FFmpeg"
+      expected_input_formats:
+        - "mp4"
+        - "mkv"
+        - "webm"
+        - "mov"
+        - "avi"
+        - "m4v"
+        - "mpeg"
+        - "mpg"
+        - "ts"
+      expected_output_formats:
+        - "mp4"
+        - "mkv"
+        - "webm"
+        - "mov"
+        - "avi"
+        - "gif"
+        - "mp3"
+        - "m4a"
+        - "wav"
+        - "flac"
+      workflows:
+        - "Container wechseln"
+        - "Video neu codieren"
+        - "Audio extrahieren"
+        - "GIF erzeugen"
+        - "Auflösung oder Bildrate reduzieren"
+      options:
+        - "Video-Codec"
+        - "Audio-Codec"
+        - "Qualität oder Zielbitrate"
+        - "Auflösung"
+        - "Bildrate"
+        - "Audio- und Untertitelspuren"
+        - "Kapitel übernehmen"
+        - "Metadaten übernehmen oder entfernen"
+        - "Hardwarebeschleunigung, falls verfügbar"
+    documents:
+      enabled_v1: true
+      preferred_engine_order:
+        - "LibreOffice headless"
+        - "Pandoc"
+      expected_input_formats:
+        - "doc"
+        - "docx"
+        - "odt"
+        - "rtf"
+        - "txt"
+        - "html"
+        - "md"
+        - "ppt"
+        - "pptx"
+        - "odp"
+        - "xls"
+        - "xlsx"
+        - "ods"
+        - "csv"
+        - "pdf"
+      expected_output_formats:
+        - "pdf"
+        - "docx"
+        - "odt"
+        - "rtf"
+        - "txt"
+        - "html"
+        - "md"
+        - "pptx"
+        - "odp"
+        - "xlsx"
+        - "ods"
+        - "csv"
+      restrictions:
+        - "PDF-Import wird nur angeboten, wenn die installierte Engine einen ausdrücklich unterstützten Pfad meldet."
+        - "PDF-zu-editierbarem-Dokument muss als strukturell riskant gekennzeichnet werden."
+        - "Konvertierungen zwischen Tabellen-, Präsentations- und Textdokumenttypen dürfen nicht pauschal angeboten werden."
+      options:
+        - "Zielprofil"
+        - "Eingebettete Schriften, sofern möglich"
+        - "PDF-Qualität"
+        - "Kommentare und Änderungsmarkierungen übernehmen, sofern möglich"
+    ebooks:
+      enabled_v1: true
+      preferred_engine_order:
+        - "Calibre ebook-convert"
+      expected_input_formats:
+        - "epub"
+        - "mobi"
+        - "azw3"
+        - "fb2"
+        - "html"
+        - "txt"
+        - "pdf"
+      expected_output_formats:
+        - "epub"
+        - "mobi"
+        - "azw3"
+        - "pdf"
+        - "html"
+        - "txt"
+      options:
+        - "Titel"
+        - "Autor"
+        - "Cover"
+        - "Seitengröße"
+        - "Schriftgröße"
+        - "Inhaltsverzeichnis"
+      restrictions:
+        - "DRM-geschützte E-Books werden abgelehnt."
+        - "PDF-Quellen werden wegen potenziell schlechter Reflow-Ergebnisse deutlich gewarnt."
+
+  m4b_workflow:
+    id: "audio_files_to_m4b"
+    name: "Audio-Dateien zu M4B"
+    enabled_v1: true
+    job_type: "merge_job"
+    purpose: >-
+      Mehrere chronologisch benannte MP3- oder andere Audiodateien zu einer
+      einzelnen M4B-Datei zusammenführen. Jede Eingabedatei wird genau zu einem
+      Kapitel. Die Kapitelreihenfolge und Kapitelbezeichnungen werden primär aus
+      den Dateinamen abgeleitet.
+    accepted_inputs:
+      required_minimum_files: 1
+      formats:
+        - "mp3"
+        - "m4a"
+        - "aac"
+        - "flac"
+        - "wav"
+        - "ogg"
+        - "opus"
+      source_modes:
+        - "mehrere hochgeladene Dateien"
+        - "ein ausgewählter Ordner"
+        - "mehrere Dateien aus einem Importordner"
+    ordering:
+      default: "natural_filename_sort"
+      allowed:
+        - "natural_filename_sort"
+        - "embedded_track_number"
+        - "manual_order"
+      natural_sort_requirements:
+        - "Part2 muss vor Part10 sortiert werden."
+        - "Groß- und Kleinschreibung darf die Reihenfolge nicht unerwartet verändern."
+        - "Zahlenblöcke im Dateinamen müssen numerisch verglichen werden."
+      recognized_examples:
+        - "Part01 - Prolog.mp3"
+        - "Part 02 - Ankunft.mp3"
+        - "Track_003.mp3"
+        - "CD1-04 Kapitelname.mp3"
+        - "Kapitel 5.mp3"
+        - "06 - Der Aufbruch.mp3"
+      user_control:
+        - "Sortierung vor Start als Liste anzeigen."
+        - "Drag-and-drop-Umsortierung erlauben."
+        - "Dateien aus dem Merge-Job entfernen oder ergänzen."
+    chapter_generation:
+      invariant: "one_source_file_equals_one_chapter"
+      default_title_source: "cleaned_filename"
+      allowed_title_sources:
+        - "cleaned_filename"
+        - "original_filename_without_extension"
+        - "embedded_title_tag"
+        - "manual_title"
+      filename_cleanup:
+        enabled_by_default: true
+        behavior:
+          - "Dateiendung entfernen."
+          - "Führende Track-, Part- oder Kapitelnummern optional entfernen."
+          - "Trennzeichen wie Bindestrich oder Unterstrich nach einem entfernten Präfix bereinigen."
+          - "Den restlichen aussagekräftigen Titel erhalten."
+        supported_prefix_patterns:
+          - "^part[ _.-]*[0-9]+[ _.-]*"
+          - "^track[ _.-]*[0-9]+[ _.-]*"
+          - "^kapitel[ _.-]*[0-9]+[ _.-]*"
+          - "^cd[0-9]+[ _.-]*[0-9]+[ _.-]*"
+          - "^[0-9]+[ _.-]+"
+        preview_required: true
+      timestamps:
+        source: "cumulative_audio_duration"
+        precision: "millisecond"
+      manual_editing:
+        chapter_title_editing: true
+        chapter_reordering: true
+        custom_chapter_boundaries: false
+        split_chapters: false
+        merge_chapters: false
+      explicit_non_features:
+        - "Keine Stilleerkennung"
+        - "Keine automatische Spracherkennung"
+        - "Keine Whisper-Transkription"
+        - "Kein Online-Abgleich von Kapiteln"
+        - "Keine MusicBrainz-Kapitelsuche"
+        - "Keine automatische semantische Kapitelanalyse"
+        - "Keine verschachtelten Kapitel in Version 1"
+    metadata:
+      fields:
+        - "Titel"
+        - "Autor"
+        - "Sprecher"
+        - "Reihe"
+        - "Bandnummer"
+        - "Jahr"
+        - "Genre"
+        - "Beschreibung"
+        - "Copyright"
+      auto_sources:
+        - "Gemeinsame eingebettete Tags der Eingabedateien"
+        - "Ordnername als optionaler Titelvorschlag"
+        - "cover.jpg"
+        - "folder.jpg"
+        - "front.jpg"
+        - "Eingebettetes Cover der ersten geeigneten Datei"
+      user_confirmation_required: true
+    cover:
+      required: false
+      supported_inputs:
+        - "jpg"
+        - "jpeg"
+        - "png"
+        - "webp"
+      allow_upload: true
+      allow_replace: true
+      crop_mode: "square_preview_without_forced_destructive_crop"
+    audio_processing:
+      target_container: "m4b"
+      preferred_codec: "aac"
+      default_bitrate_kbps: 96
+      bitrate_presets_kbps:
+        speech_compact: 64
+        standard: 96
+        high_quality: 128
+      channel_default: "preserve_up_to_stereo"
+      sample_rate_default: "preserve_when_supported"
+      copy_compatible_aac_without_reencode: true
+      mixed_input_policy: "normalize_to_common_aac_profile"
+      optional_loudness_normalization: true
+      loudness_normalization_default: false
+      preserve_source_gaps: true
+      insert_additional_gaps_default: false
+    implementation_engines:
+      preferred:
+        - "m4b-tool"
+        - "FFmpeg"
+      adapter_requirement: >-
+        Der M4B-Adapter muss die Reihenfolge, bereinigten Kapiteltitel,
+        berechneten Kapitelstartzeiten, Metadaten und Cover als explizite
+        Jobdaten speichern. Die erzeugte M4B-Datei muss nach Abschluss erneut
+        geprüft werden, um Kapitelanzahl, Dauer und Metadaten zu validieren.
+    validation:
+      - "Ausgabe ist lesbar und enthält den erwarteten AAC-Audiostream."
+      - "Kapitelanzahl entspricht der Anzahl aktiver Eingabedateien."
+      - "Kapitelreihenfolge entspricht der bestätigten Dateireihenfolge."
+      - "Gesamtdauer weicht nur innerhalb definierter technischer Toleranz von der Summe der Quellen ab."
+      - "Kapiteltitel entsprechen der bestätigten Vorschau."
+      - "Cover und Metadaten sind vorhanden, sofern angegeben."
+    ui_steps:
+      - "Audio-Dateien oder Ordner wählen"
+      - "Reihenfolge und Kapiteltitel prüfen"
+      - "Metadaten und Cover ergänzen"
+      - "Qualität auswählen"
+      - "M4B erstellen"
+      - "Ergebnis prüfen und herunterladen oder exportieren"
+
+  presets:
+    built_in:
+      image_web:
+        category: "images"
+        label: "Fürs Web"
+        behavior:
+          target_format: "webp"
+          quality: 82
+          max_long_edge_px: 2000
+          auto_orient: true
+          metadata: "remove_private"
+      image_lossless:
+        category: "images"
+        label: "Verlustfrei"
+        behavior:
+          target_format: "png"
+          preserve_alpha: true
+      audio_music:
+        category: "audio"
+        label: "Musik"
+        behavior:
+          target_format: "mp3"
+          quality_mode: "high"
+          preserve_metadata: true
+          preserve_cover: true
+      audio_voice:
+        category: "audio"
+        label: "Sprache kompakt"
+        behavior:
+          target_format: "m4a"
+          codec: "aac"
+          bitrate_kbps: 64
+          channels: "mono_or_stereo_source_dependent"
+      video_compatible:
+        category: "video"
+        label: "Hohe Kompatibilität"
+        behavior:
+          target_format: "mp4"
+          video_codec: "h264"
+          audio_codec: "aac"
+          pixel_format: "yuv420p"
+      video_small:
+        category: "video"
+        label: "Kleinere Datei"
+        behavior:
+          target_format: "mp4"
+          video_codec: "h265_if_available_else_h264"
+          audio_codec: "aac"
+      document_pdf:
+        category: "documents"
+        label: "Als PDF"
+        behavior:
+          target_format: "pdf"
+      ebook_epub:
+        category: "ebooks"
+        label: "Als EPUB"
+        behavior:
+          target_format: "epub"
+      audiobook_m4b:
+        category: "audio"
+        label: "Hörbuch als M4B"
+        behavior:
+          workflow: "audio_files_to_m4b"
+          title_source: "cleaned_filename"
+          sort: "natural_filename_sort"
+          bitrate_kbps: 96
+          loudness_normalization: false
+
+  custom_recipes:
+    enabled_v1: true
+    fields:
+      - "Name"
+      - "Beschreibung"
+      - "Kategorie"
+      - "Erlaubte Eingabeformate"
+      - "Zielformat"
+      - "Engineoptionen"
+      - "Dateinamensvorlage"
+      - "Ausgabeziel"
+      - "Aufbewahrungsdauer"
+    behavior:
+      - "Rezepte aus einer erfolgreich konfigurierten Konvertierung speichern."
+      - "Rezepte bearbeiten, duplizieren und löschen."
+      - "Inkompatible Rezepte für eine Quelle deaktiviert anzeigen und begründen."
+      - "Rezepte dürfen keine beliebigen Shell-Befehle enthalten."
+      - "Engineoptionen müssen über validierte Schemas gespeichert werden."
+    ownership:
+      default: "private_per_user"
+      admin_can_publish_global_recipes: true
+
+  job_system:
+    job_types:
+      - "single_conversion"
+      - "batch_conversion"
+      - "merge_job"
+      - "watchfolder_job"
+    states:
+      - "draft"
+      - "analyzing"
+      - "waiting"
+      - "running"
+      - "cancelling"
+      - "completed"
+      - "completed_with_warnings"
+      - "failed"
+      - "cancelled"
+      - "expired"
+    required_fields:
+      - "job_id"
+      - "owner_id"
+      - "job_type"
+      - "created_at"
+      - "started_at"
+      - "finished_at"
+      - "source_manifest"
+      - "selected_capability"
+      - "validated_options"
+      - "worker_id"
+      - "progress"
+      - "warnings"
+      - "error_code"
+      - "result_manifest"
+      - "retention_until"
+    operations:
+      create: true
+      start: true
+      cancel: true
+      retry: true
+      duplicate: true
+      delete_history_entry: true
+      delete_artifacts: true
+      pin_artifacts: true
+    progress:
+      required: true
+      fallback_when_engine_has_no_progress: "indeterminate_with_elapsed_time"
+      fields:
+        - "phase"
+        - "percentage_if_available"
+        - "processed_units_if_available"
+        - "elapsed_time"
+        - "estimated_remaining_time_if_reliable"
+    concurrency:
+      default_global_jobs: 2
+      default_per_user_jobs: 2
+      configurable_by_admin: true
+      worker_specific_limits: true
+    cancellation:
+      graceful_timeout_seconds: 10
+      force_kill_after_timeout: true
+      partial_outputs_deleted_by_default: true
+    retry:
+      retain_original_job: true
+      allow_option_changes: true
+      max_automatic_retries_default: 0
+    logs:
+      user_visible_summary: true
+      full_engine_log_admin_only: true
+      secret_redaction_required: true
+      command_preview:
+        enabled: true
+        access: "admin_or_advanced_user"
+        shell_safe_display_only: true
+
+  batch_processing:
+    enabled_v1: true
+    modes:
+      same_recipe_each_file:
+        enabled: true
+        description: "Jede Quelldatei wird mit demselben Rezept separat verarbeitet."
+      compatible_auto_grouping:
+        enabled: true
+        description: "Vertiku gruppiert Dateien nach kompatiblen Fähigkeiten und zeigt Abweichungen vor Start."
+      merge_to_single_output:
+        enabled: true
+        initial_workflows:
+          - "audio_files_to_m4b"
+      multi_page_image_to_pdf:
+        enabled: true
+      concatenate_video:
+        enabled_v1: false
+    output_naming:
+      template_default: "{source_stem}.{target_ext}"
+      available_tokens:
+        - "source_stem"
+        - "source_ext"
+        - "target_ext"
+        - "date"
+        - "time"
+        - "counter"
+        - "recipe"
+
+  watchfolders:
+    enabled_v1: "optional"
+    full_support_version: "1.1"
+    model:
+      input_folder: "configured subpath under /imports"
+      recipe: "required"
+      output_folder: "configured subpath under /exports"
+      success_action:
+        default: "leave_source"
+        allowed:
+          - "leave_source"
+          - "move_to_processed"
+          - "delete_after_success"
+      failure_action:
+        default: "move_to_failed"
+      stability_delay_seconds_default: 10
+      recursive_default: true
+      ignore_hidden_files: true
+    safeguards:
+      - "Nur vollständig geschriebene, über einen Stabilitätszeitraum unveränderte Dateien verarbeiten."
+      - "Keine Endlosschleife zwischen Import- und Exportordner zulassen."
+      - "Dateien über Prüfsumme oder persistente Jobzuordnung deduplizieren."
+      - "Löschaktionen müssen vom Admin ausdrücklich aktiviert werden."
+
+  architecture:
+    style: "modular_core_and_workers"
+    components:
+      web_frontend:
+        responsibilities:
+          - "Responsive Benutzeroberfläche"
+          - "Uploads"
+          - "Job- und Rezeptverwaltung"
+          - "Live-Fortschritt über SSE oder WebSocket"
+      core_api:
+        responsibilities:
+          - "Authentifizierung und Autorisierung"
+          - "Dateimanifeste"
+          - "Format- und Capability-Auflösung"
+          - "Jobplanung"
+          - "Rezepte"
+          - "Aufbewahrung und Aufräumen"
+          - "Worker-Registrierung"
+      database:
+        default: "SQLite"
+        optional: "PostgreSQL"
+        requirements:
+          - "Migrationen"
+          - "Transaktionen für Jobstatus"
+          - "Keine Binärdateien in der Datenbank speichern"
+      queue:
+        default: "database_backed_queue"
+        optional_scale_backend: "Redis"
+        requirements:
+          - "At-least-once-Dispatch mit idempotentem Workerstart"
+          - "Lease und Heartbeat für laufende Jobs"
+          - "Verwaiste Jobs nach Workerabbruch erkennen"
+      worker_registry:
+        responsibilities:
+          - "Worker-Heartbeat"
+          - "Engine- und Codec-Versionen"
+          - "Capability-Manifest"
+          - "Ressourcenstatus"
+          - "Concurrency-Limits"
+      cleanup_service:
+        responsibilities:
+          - "Abgelaufene Uploads löschen"
+          - "Abgelaufene Ergebnisse löschen"
+          - "Verwaiste temporäre Arbeitsverzeichnisse entfernen"
+          - "Datenbankeinträge konsistent halten"
+    worker_profiles:
+      media_worker:
+        required_v1: true
+        engines:
+          - "FFmpeg"
+          - "ffprobe"
+          - "m4b-tool"
+          - "ExifTool"
+        capabilities:
+          - "Audio"
+          - "Video"
+          - "M4B"
+      image_worker:
+        required_v1: true
+        engines:
+          - "libvips"
+          - "ImageMagick"
+          - "Inkscape"
+        capabilities:
+          - "Rasterbilder"
+          - "Vektoreingaben"
+          - "Mehrseitige Bild-PDFs"
+      document_worker:
+        required_v1: true
+        engines:
+          - "LibreOffice headless"
+          - "Pandoc"
+        capabilities:
+          - "Textdokumente"
+          - "Tabellen"
+          - "Präsentationen"
+          - "Markup"
+      ebook_worker:
+        required_v1: true
+        engines:
+          - "Calibre ebook-convert"
+        capabilities:
+          - "E-Books"
+    deployment_modes:
+      simple:
+        description: "Ein Core-Container und ein kombinierter All-in-one-Worker."
+        recommended_for: "Einzelserver und erste Installation"
+      modular:
+        description: "Core und getrennte Workerprofile."
+        recommended_for: "Kleinere Images, gezielte Updates und getrennte Ressourcenlimits"
+      remote_workers:
+        enabled_v1: false
+        planned_for: "1.1"
+    worker_protocol:
+      transport: "authenticated_internal_http_or_message_queue"
+      shell_commands_from_client: false
+      capabilities_schema_versioned: true
+      job_payload_validated: true
+
+  security:
+    threat_model:
+      - "Manipulierte Mediendateien"
+      - "Path Traversal"
+      - "Archive Bombs in späteren Archivfunktionen"
+      - "Ressourcenerschöpfung durch große Dateien oder lange Jobs"
+      - "Command Injection über Dateinamen oder Optionen"
+      - "Symlink-Angriffe in gemounteten Ordnern"
+      - "Unberechtigter Zugriff auf Ergebnisse"
+      - "Exponierte Metadaten oder temporäre Dateien"
+    mandatory_controls:
+      - "Als unprivilegierter Benutzer laufen."
+      - "Keinen Docker-Socket mounten."
+      - "Keine privilegierten Container verwenden."
+      - "Dateipfade kanonisieren und gegen erlaubte Roots prüfen."
+      - "Dateinamen niemals direkt in Shellstrings interpolieren."
+      - "Prozesse als Argumentlisten ohne shell=true starten."
+      - "Temporäre Arbeitsverzeichnisse pro Job isolieren."
+      - "CPU-, RAM-, Dateigrößen- und Laufzeitlimits konfigurieren."
+      - "Symlinks standardmäßig ablehnen."
+      - "Uploads vor Auslieferung mit Content-Disposition attachment senden."
+      - "Strikte Content-Security-Policy verwenden."
+      - "CSRF-Schutz und sichere Session-Cookies verwenden."
+      - "Passwörter mit Argon2id hashen."
+      - "Sensible Werte in Logs redigieren."
+      - "Resultate nur dem Besitzer oder Admin zugänglich machen."
+    default_limits:
+      max_upload_size_gib: 10
+      max_files_per_batch: 500
+      max_job_runtime_minutes: 360
+      max_uncompressed_working_size_gib: 50
+      max_concurrent_jobs_global: 2
+    malware_scanning:
+      required_v1: false
+      optional_integration: "ClamAV"
+    network_access:
+      workers_default: "no_outbound_network_required"
+      document_worker_outbound_network: "disabled"
+      media_worker_outbound_network: "disabled"
+      rationale: "Version 1 verarbeitet ausschließlich lokale Quellen."
+
+  authentication:
+    required: true
+    first_run:
+      setup_secret_environment_variable: "VERTIKU_SETUP_SECRET"
+      behavior:
+        - "Bei leerer Benutzerdatenbank unmittelbar die Adminregistrierung anzeigen."
+        - "Registrierung nur nach Eingabe des Setup-Secrets erlauben."
+        - "Adminpasswort darf nicht dem Setup-Secret entsprechen."
+        - "Setup-Secret niemals speichern oder in Logs ausgeben."
+        - "Nach erfolgreicher Ersteinrichtung öffentliche Registrierung deaktivieren."
+    roles:
+      admin:
+        permissions:
+          - "Benutzer verwalten"
+          - "Worker und Engines verwalten"
+          - "Globale Rezepte veröffentlichen"
+          - "Import- und Exportordner konfigurieren"
+          - "Limits und Aufbewahrung konfigurieren"
+          - "Technische Logs und Diagnosen sehen"
+      user:
+        permissions:
+          - "Eigene Dateien hochladen"
+          - "Eigene Jobs verwalten"
+          - "Eigene Rezepte verwalten"
+          - "Eigene Ergebnisse herunterladen"
+    sessions:
+      cookie_http_only: true
+      cookie_secure_when_https: true
+      cookie_same_site: "lax"
+      configurable_session_lifetime: true
+    api_tokens:
+      enabled_v1: false
+      planned_for: "1.1"
+
+  user_interface:
+    navigation:
+      main_sections:
+        - id: "convert"
+          label: "Konvertieren"
+          icon: "conversion_path"
+        - id: "jobs"
+          label: "Aufträge"
+          icon: "pending_actions"
+        - id: "recipes"
+          label: "Rezepte"
+          icon: "bookmark"
+        - id: "folders"
+          label: "Ordner"
+          icon: "folder_open"
+          visibility: "only_when_mounted_folders_are_configured"
+      mobile:
+        pattern: "bottom_navigation_for_3_to_4_sections"
+        settings_entry: "profile_or_three_dot_menu"
+      desktop:
+        pattern: "left_navigation_rail"
+        settings_entry: "profile_or_three_dot_menu"
+    header:
+      left:
+        - "Appsymbol"
+        - "Vertiku"
+        - "Untertitel auf ausreichend breiten Ansichten"
+      right:
+        - "Optional Suche in Jobs"
+        - "Profil oder Overflow-Menü"
+      forbidden:
+        - "Workerstatus direkt neben dem Appnamen"
+        - "Versionsnummer"
+        - "Git-SHA"
+        - "Aktive Jobanzahl als permanenter Headerchip"
+    convert_page:
+      hero:
+        title: "Was möchtest du konvertieren?"
+        source_actions:
+          - "Dateien auswählen"
+          - "Ordner auswählen"
+          - "Aus Importordner wählen"
+      stages:
+        - id: "source_selection"
+          content:
+            - "Uploadfläche"
+            - "Dateiliste"
+            - "Analysefortschritt"
+        - id: "target_selection"
+          content:
+            - "Empfohlene Zielformate"
+            - "Weitere verfügbare Formate"
+            - "Qualitäts- und Verlusthinweise"
+        - id: "options"
+          content:
+            - "Presetauswahl"
+            - "Einfache Einstellungen"
+            - "Einklappbare erweiterte Einstellungen"
+            - "Ausgabeziel"
+        - id: "review"
+          content:
+            - "Quellen"
+            - "Ausgabe"
+            - "Engine"
+            - "Warnungen"
+            - "Geschätzte Ausgabegröße nur wenn zuverlässig"
+            - "Konvertieren-Aktion"
+      principles:
+        - "Nutzer nicht mit allen Engineparametern gleichzeitig konfrontieren."
+        - "Empfohlene Presets zuerst anzeigen."
+        - "Erweiterte Parameter deutlich abtrennen."
+        - "Inkompatible Ziele nicht auswählbar anzeigen oder vollständig ausblenden."
+    jobs_page:
+      sections:
+        - "Aktiv"
+        - "Wartend"
+        - "Abgeschlossen"
+        - "Fehlgeschlagen"
+      job_card_fields:
+        - "Quelldatei oder Zusammenfassung"
+        - "Zielformat"
+        - "Status"
+        - "Fortschritt"
+        - "Dauer"
+        - "Ausgabegröße"
+        - "Warnungen"
+      actions:
+        - "Abbrechen"
+        - "Erneut versuchen"
+        - "Mit geänderten Optionen wiederholen"
+        - "Herunterladen"
+        - "In Exportordner speichern"
+        - "Als Rezept speichern"
+        - "Artefakte löschen"
+    recipes_page:
+      presentation:
+        mobile: "rounded_recipe_cards"
+        desktop: "searchable_card_grid_or_table"
+      actions:
+        - "Ausführen"
+        - "Bearbeiten"
+        - "Duplizieren"
+        - "Löschen"
+    m4b_editor:
+      presentation:
+        mobile: "step_based_single_column"
+        desktop: "two_column_source_and_metadata_layout"
+      required_components:
+        - "Sortierbare Dateiliste"
+        - "Fortlaufende Kapitelnummer"
+        - "Editierbarer Kapiteltitel"
+        - "Dateidauer"
+        - "Covervorschau"
+        - "Metadatenformular"
+        - "Qualitätspreset"
+        - "Zusammenfassung vor Start"
+      forbidden_components:
+        - "Wellenformeditor"
+        - "Stilleerkennungsoptionen"
+        - "Transkriptionsoptionen"
+        - "Online-Kapitelsuche"
+    settings_and_about:
+      mobile_presentation: "bottom_sheet_or_center_sheet"
+      desktop_presentation: "right_side_sheet"
+      sections:
+        appearance:
+          - "Modus"
+          - "Theme"
+          - "Bewegung reduzieren"
+        conversion_defaults:
+          - "Standard-Ausgabeordner"
+          - "Standard-Aufbewahrungsdauer"
+          - "Standard-Bildqualität"
+          - "Standard-Audioqualität"
+        app_info:
+          - "Version"
+          - "Build-Datum"
+          - "Git-SHA"
+          - "Lizenzen"
+        admin_info:
+          - "Workerstatus"
+          - "Engineversionen"
+          - "Installierte Codecs"
+          - "Speichernutzung"
+          - "Aktive Limits"
+          - "Diagnosen"
+          - "Logs"
+          - "Debugdetails kopieren"
+    feedback:
+      toasts:
+        - "Job gestartet"
+        - "Rezept gespeichert"
+        - "Download bereit"
+        - "In Zwischenablage kopiert"
+        - "Aktion rückgängig machen, sofern möglich"
+      destructive_confirmations:
+        - "Ergebnisdateien löschen"
+        - "Rezept löschen"
+        - "Watchfolder-Quelldatei nach Erfolg löschen"
+
+  accessibility:
+    standard: "WCAG 2.2 AA"
+    requirements:
+      - "Vollständige Tastaturbedienung"
+      - "Sichtbare Fokuszustände"
+      - "ARIA-Labels für Iconbuttons"
+      - "Status nicht ausschließlich über Farbe darstellen"
+      - "Fortschritt für Screenreader ankündigen"
+      - "Drag-and-drop-Sortierung zusätzlich über Tastaturaktionen ermöglichen"
+      - "Fehlermeldungen programmatisch mit dem auslösenden Feld verbinden"
+      - "Textskalierung ohne Funktionsverlust unterstützen"
+
+  engine_adapters:
+    contract:
+      required_methods:
+        - "probe"
+        - "list_capabilities"
+        - "validate_options"
+        - "build_execution_plan"
+        - "start"
+        - "read_progress"
+        - "cancel"
+        - "validate_result"
+      required_metadata:
+        - "adapter_id"
+        - "adapter_version"
+        - "engine_name"
+        - "engine_version"
+        - "supported_inputs"
+        - "supported_outputs"
+        - "option_schema"
+        - "quality_class"
+        - "resource_profile"
+      prohibited:
+        - "Freie Shellbefehle aus Frontenddaten"
+        - "Nicht validierte Engineargumente"
+        - "Ungefilterte Übergabe von Dateinamen an eine Shell"
+    initial_adapters:
+      - id: "ffmpeg"
+        required: true
+      - id: "m4b_tool"
+        required: true
+      - id: "libvips"
+        required: true
+      - id: "imagemagick"
+        required: true
+      - id: "inkscape"
+        required: true
+      - id: "libreoffice"
+        required: true
+      - id: "pandoc"
+        required: true
+      - id: "calibre"
+        required: true
+      - id: "exiftool"
+        required: false
+
+  api:
+    internal_api:
+      required_v1: true
+      style: "REST_JSON"
+      documentation: "OpenAPI"
+      endpoints_required:
+        - "auth"
+        - "uploads"
+        - "file-analysis"
+        - "capabilities"
+        - "jobs"
+        - "job-events"
+        - "artifacts"
+        - "recipes"
+        - "workers"
+        - "settings"
+    external_api:
+      enabled_v1: false
+      planned_for: "1.1"
+    live_updates:
+      preferred: "Server-Sent Events"
+      fallback: "Polling"
+
+  persistence:
+    database_entities:
+      - "users"
+      - "sessions"
+      - "jobs"
+      - "job_sources"
+      - "job_artifacts"
+      - "job_events"
+      - "recipes"
+      - "workers"
+      - "worker_capabilities"
+      - "configured_folders"
+      - "watchfolders"
+      - "app_settings"
+      - "audit_events"
+    file_storage:
+      upload_root: "/data/uploads"
+      work_root: "/data/work"
+      result_root: "/data/results"
+      config_root: "/data/config"
+      import_root: "/imports"
+      export_root: "/exports"
+    checksum_algorithm: "sha256"
+    backup_requirements:
+      - "Datenbank und Konfiguration müssen ohne temporäre Arbeitsdateien sicherbar sein."
+      - "Rezepte und Appkonfiguration als JSON oder YAML exportieren können."
+
+  configuration:
+    environment_variables:
+      required:
+        VERTIKU_SETUP_SECRET:
+          secret: true
+          description: "Secret für die einmalige Adminregistrierung."
+      optional:
+        TZ:
+          default: "Europe/Berlin"
+        VERTIKU_PORT:
+          default: 8080
+        VERTIKU_DATA_DIR:
+          default: "/data"
+        VERTIKU_IMPORT_DIR:
+          default: "/imports"
+        VERTIKU_EXPORT_DIR:
+          default: "/exports"
+        VERTIKU_DATABASE_URL:
+          default: "sqlite:////data/vertiku.db"
+        VERTIKU_MAX_UPLOAD_GIB:
+          default: 10
+        VERTIKU_MAX_CONCURRENT_JOBS:
+          default: 2
+        VERTIKU_DEFAULT_RETENTION_HOURS:
+          default: 24
+        VERTIKU_LOG_LEVEL:
+          default: "info"
+        PUID:
+          default: 1000
+        PGID:
+          default: 1000
+        UMASK:
+          default: "002"
+        VERTIKU_ENABLE_HW_ACCEL:
+          default: false
+        VERTIKU_HW_ACCEL_TYPE:
+          allowed:
+            - "vaapi"
+            - "qsv"
+            - "nvenc"
+            - "none"
+          default: "none"
+    configuration_rules:
+      - "Secrets niemals in die Browserkonfiguration ausliefern."
+      - "Ungültige Pfade und nicht beschreibbare Exportziele beim Start melden."
+      - "Engineverfügbarkeit nicht aus Konfiguration annehmen, sondern beim Worker prüfen."
+
+  docker:
+    required: true
+    images:
+      core:
+        name: "ghcr.io/<owner>/vertiku"
+        exposes_port: 8080
+      all_in_one_worker:
+        name: "ghcr.io/<owner>/vertiku-worker"
+      optional_workers:
+        - "ghcr.io/<owner>/vertiku-worker-media"
+        - "ghcr.io/<owner>/vertiku-worker-image"
+        - "ghcr.io/<owner>/vertiku-worker-document"
+        - "ghcr.io/<owner>/vertiku-worker-ebook"
+    compose_requirements:
+      - "Einfaches Standard-Compose für Core und All-in-one-Worker bereitstellen."
+      - "Modulares Beispiel mit getrennten Workern bereitstellen."
+      - "Persistentes /data-Volume verwenden."
+      - "/imports standardmäßig read-only mounten."
+      - "/exports read-write mounten."
+      - "Healthchecks für Core und Worker definieren."
+      - "restart: unless-stopped verwenden."
+      - "Keine privilegierten Container."
+      - "Keinen Docker-Socket mounten."
+      - "read_only root filesystem verwenden, soweit Engines dies erlauben."
+      - "tmpfs oder eigenes temporäres Volume für /tmp verwenden."
+    healthchecks:
+      core:
+        endpoint: "/health"
+        must_check:
+          - "HTTP-Server"
+          - "Datenbank"
+          - "Schreibbarkeit notwendiger Datenpfade"
+      worker:
+        endpoint: "/health"
+        must_check:
+          - "Workerprozess"
+          - "Enginebinaries"
+          - "Verbindung zum Core"
+    hardware_acceleration:
+      required_v1: false
+      supported_optional:
+        - "VAAPI"
+        - "Intel Quick Sync"
+        - "NVIDIA NVENC"
+      behavior:
+        - "Hardwarebeschleunigte Fähigkeiten nur registrieren, wenn ein Funktionstest erfolgreich ist."
+        - "Bei Fehler automatisch auf Softwarekonvertierung zurückfallen, sofern erlaubt."
+
+  observability:
+    application_logs:
+      format: "structured_json_preferred"
+      human_readable_option: true
+      rotation_required: true
+    metrics:
+      enabled_v1: true
+      endpoint: "/metrics"
+      format: "Prometheus"
+      fields:
+        - "Jobanzahl nach Status"
+        - "Jobdauer nach Adapter"
+        - "Fehleranzahl nach Adapter"
+        - "Verarbeitete Bytes"
+        - "Aktive Worker"
+        - "Queue-Länge"
+    audit_log:
+      enabled: true
+      events:
+        - "Anmeldung"
+        - "Benutzerverwaltung"
+        - "Änderung globaler Einstellungen"
+        - "Änderung von Ordnerfreigaben"
+        - "Löschung von Ergebnissen"
+        - "Veröffentlichung globaler Rezepte"
+      exclude:
+        - "Dateiinhalte"
+        - "Passwörter"
+        - "Setup-Secret"
+
+  error_handling:
+    user_error_categories:
+      unsupported_input:
+        message: "Dieser Dateityp wird von den installierten Vertiku-Workern nicht unterstützt."
+      no_target_available:
+        message: "Für diese Datei ist aktuell kein geeignetes Zielformat verfügbar."
+      invalid_file:
+        message: "Die Datei konnte nicht zuverlässig gelesen oder analysiert werden."
+      resource_limit:
+        message: "Der Auftrag überschreitet ein konfiguriertes Ressourcenlimit."
+      engine_failed:
+        message: "Die Konvertierungsengine konnte den Auftrag nicht abschließen."
+      result_validation_failed:
+        message: "Die Ausgabedatei wurde erzeugt, hat die anschließende Prüfung aber nicht bestanden."
+    requirements:
+      - "Nutzerfreundliche Zusammenfassung und optional technische Details trennen."
+      - "Stabile maschinenlesbare Fehlercodes verwenden."
+      - "Fehlerhafte Jobdaten nicht automatisch löschen, bevor eine Diagnose möglich ist."
+      - "Temporäre Quelldateien nach definierter Frist trotzdem bereinigen."
+
+  notifications:
+    in_app:
+      required_v1: true
+      events:
+        - "Job abgeschlossen"
+        - "Job mit Warnungen abgeschlossen"
+        - "Job fehlgeschlagen"
+        - "Ergebnis läuft bald ab"
+    browser_notifications:
+      enabled_v1: false
+      planned_for: "1.1"
+    external_notifications:
+      enabled_v1: false
+      planned_for: "1.1"
+
+  localization:
+    default_language: "de"
+    required_languages_v1:
+      - "de"
+      - "en"
+    architecture: "translation_keys_no_hardcoded_ui_strings"
+    filename_handling:
+      unicode_required: true
+      preserve_original_names: true
+      normalize_for_output_only_when_required: true
+
+  performance:
+    goals:
+      - "Die UI bleibt bei laufenden Konvertierungen responsiv."
+      - "Uploads und Konvertierungen blockieren nicht den Webprozess."
+      - "Joblisten werden paginiert oder virtuell gerendert."
+      - "Große Dateien werden gestreamt und nicht vollständig in den Arbeitsspeicher geladen."
+    limits:
+      max_preview_file_size_mib: 100
+      generate_thumbnails_as_background_jobs: true
+      server_side_pagination_default: 50
+
+  testing:
+    required_layers:
+      unit:
+        - "Natural Sort"
+        - "Dateinamensbereinigung für M4B-Kapitel"
+        - "Capability-Auflösung"
+        - "Optionsvalidierung"
+        - "Pfadkanonisierung"
+        - "Aufbewahrungsregeln"
+      adapter_integration:
+        - "Jeder Adapter mit realen kleinen Beispieldateien"
+        - "Fehlerszenarien und Prozessabbruch"
+        - "Ergebnisvalidierung"
+      golden_files:
+        - "Bildkonvertierungen"
+        - "Audiokonvertierungen"
+        - "M4B mit erwarteten Kapiteln"
+        - "Dokumentkonvertierungen"
+      security:
+        - "Path Traversal"
+        - "Command Injection über Dateinamen"
+        - "Symlink Escape"
+        - "Unberechtigter Artefaktzugriff"
+        - "Überlange Dateinamen"
+        - "Manipulierte MIME-Typen"
+      end_to_end:
+        - "Upload bis Download"
+        - "Importordner bis Exportordner"
+        - "Batchjob"
+        - "M4B-Workflow"
+        - "Jobabbruch"
+        - "Ablauf und Bereinigung von Ergebnissen"
+      responsive_ui:
+        breakpoints:
+          - 360
+          - 412
+          - 768
+          - 1024
+          - 1440
+        checks:
+          - "Keine horizontalen Überläufe"
+          - "Mindestens 44 px große Interaktionen"
+          - "Mobile Bottom Navigation kollidiert nicht mit Safe Areas"
+          - "Dialoge und Sheets bleiben vollständig bedienbar"
+
+  acceptance_criteria:
+    core:
+      - id: "AC-CORE-001"
+        criterion: "Ein Nutzer kann eine unterstützte Datei hochladen, analysieren, ein Zielformat wählen, konvertieren und herunterladen."
+      - id: "AC-CORE-002"
+        criterion: "Die Zielformatliste basiert auf den aktuell registrierten Workerfähigkeiten."
+      - id: "AC-CORE-003"
+        criterion: "Verlustreiche oder strukturell riskante Konvertierungen werden vor Start sichtbar gekennzeichnet."
+      - id: "AC-CORE-004"
+        criterion: "Ein laufender Job kann abgebrochen und ein fehlgeschlagener Job mit geänderten Einstellungen wiederholt werden."
+      - id: "AC-CORE-005"
+        criterion: "Temporäre Dateien werden nach der konfigurierten Aufbewahrungsdauer entfernt."
+    m4b:
+      - id: "AC-M4B-001"
+        criterion: "Part2 wird bei natürlicher Sortierung vor Part10 einsortiert."
+      - id: "AC-M4B-002"
+        criterion: "Jede aktive Eingabedatei erzeugt genau ein Kapitel."
+      - id: "AC-M4B-003"
+        criterion: "Der Nutzer kann die Reihenfolge und Kapiteltitel vor der Konvertierung prüfen und ändern."
+      - id: "AC-M4B-004"
+        criterion: "Vertiku verwendet keine Stilleerkennung, Transkription oder Online-Kapitelsuche."
+      - id: "AC-M4B-005"
+        criterion: "Die erzeugte M4B wird nach Abschluss auf Dauer, Kapitelanzahl, Kapiteltitel und Metadaten geprüft."
+    scope:
+      - id: "AC-SCOPE-001"
+        criterion: "Version 1 enthält weder yt-dlp noch ein Eingabefeld für Medienplattform-URLs."
+      - id: "AC-SCOPE-002"
+        criterion: "Vertiku funktioniert vollständig ohne Pulliku und enthält keine Pulliku-Abhängigkeit."
+    design:
+      - id: "AC-DESIGN-001"
+        criterion: "Die Anwendung implementiert die fünf Pixel-Soft-Utility-Themes in Light, Dark und System."
+      - id: "AC-DESIGN-002"
+        criterion: "Version, Build-Datum, Git-SHA, Workerdiagnosen und Logs befinden sich nur in About oder Admin Info."
+      - id: "AC-DESIGN-003"
+        criterion: "Mobile und Desktopansicht verwenden jeweils das im Designsystem vorgesehene Navigationsmuster."
+    security:
+      - id: "AC-SEC-001"
+        criterion: "Kein Konvertierungsprozess wird über shell=true mit unvalidierten Nutzereingaben gestartet."
+      - id: "AC-SEC-002"
+        criterion: "Worker besitzen keinen Docker-Socket und laufen nicht privilegiert."
+      - id: "AC-SEC-003"
+        criterion: "Ein Benutzer kann keine Quelldateien oder Ergebnisse anderer Benutzer abrufen."
+
+  implementation_order:
+    phases:
+      - phase: 1
+        name: "Foundation"
+        deliverables:
+          - "Repositorystruktur"
+          - "Core API"
+          - "Datenbankmigrationen"
+          - "Authentifizierung und First-Run-Registrierung"
+          - "Pixel-Soft-Utility-Tokens"
+          - "Upload- und Storageabstraktion"
+      - phase: 2
+        name: "Capability and Jobs"
+        deliverables:
+          - "Workerregistrierung"
+          - "Capability-Manifest"
+          - "Jobqueue"
+          - "Live-Fortschritt"
+          - "Jobverlauf"
+      - phase: 3
+        name: "Media"
+        deliverables:
+          - "FFmpeg-Adapter"
+          - "Audio- und Videokonvertierung"
+          - "M4B-Workflow"
+          - "Ergebnisvalidierung"
+      - phase: 4
+        name: "Images"
+        deliverables:
+          - "libvips- oder ImageMagick-Adapter"
+          - "Inkscape-Adapter"
+          - "Bildpresets"
+      - phase: 5
+        name: "Documents and E-Books"
+        deliverables:
+          - "LibreOffice-Adapter"
+          - "Pandoc-Adapter"
+          - "Calibre-Adapter"
+          - "Strukturwarnungen"
+      - phase: 6
+        name: "Recipes and Folders"
+        deliverables:
+          - "Rezepte"
+          - "Import- und Exportbrowser"
+          - "Optionale einfache Watchfolder"
+      - phase: 7
+        name: "Hardening"
+        deliverables:
+          - "Ressourcenlimits"
+          - "Sicherheitstests"
+          - "Aufräumdienst"
+          - "Prometheus-Metriken"
+          - "Dokumentation"
+
+  repository_requirements:
+    required_files:
+      - "README.md"
+      - "LICENSE"
+      - "SECURITY.md"
+      - "CONTRIBUTING.md"
+      - "CHANGELOG.md"
+      - "docker-compose.yml"
+      - ".env.example"
+      - "appspec.yaml"
+      - "pixel_design.yaml"
+      - "docs/architecture.md"
+      - "docs/engines.md"
+      - "docs/security.md"
+      - "docs/supported-formats.md"
+    readme_sections_in_order:
+      - "Vertiku"
+      - "Kurzbeschreibung"
+      - "Screenshots"
+      - "Funktionen"
+      - "Unterstützte Bereiche"
+      - "Schnellstart"
+      - "Docker-Installation"
+      - "Volumes und Ordner"
+      - "Umgebungsvariablen"
+      - "Worker und Engines"
+      - "M4B-Workflow"
+      - "Sicherheit"
+      - "Updates und Backups"
+      - "Teil der ishiku-Familie"
+      - "Mit ChatGPT Codex erstellt"
+      - "Drittanbieterkomponenten und Lizenzen"
+      - "Lizenz"
+    required_statements:
+      - "Unterstützte Formate hängen von installierten Engines und Codecs ab."
+      - "Vertiku umgeht kein DRM."
+      - "Vertiku enthält in Version 1 kein yt-dlp."
+      - "Vertiku ist unabhängig von Pulliku."
+
+  third_party_and_licensing:
+    requirements:
+      - "Lizenzen aller gebündelten Engines prüfen und dokumentieren."
+      - "Engineversionen in About/Admin Info anzeigen."
+      - "Drittanbieterhinweise im Image und Repository mitliefern."
+      - "Optionale patent- oder distributionsabhängige Codecs nicht stillschweigend voraussetzen."
+      - "Unterstützte Formate aus der tatsächlichen Laufzeitumgebung ermitteln."
+    expected_tools:
+      - "FFmpeg"
+      - "m4b-tool"
+      - "libvips"
+      - "ImageMagick"
+      - "Inkscape"
+      - "LibreOffice"
+      - "Pandoc"
+      - "Calibre"
+      - "ExifTool"
+
+  codex_instruction:
+    goal: >-
+      Implementiere Vertiku anhand dieser Spezifikation als sicheren,
+      selbst gehosteten, modularen Any-to-Any-Dateikonverter. Beginne mit einem
+      funktionalen vertikalen Slice aus Upload, Analyse, Capability-Auflösung,
+      FFmpeg-Worker, Jobqueue, Live-Fortschritt und Ergebnisdownload. Implementiere
+      anschließend den M4B-Workflow exakt nach dem Grundsatz "eine Datei entspricht
+      einem Kapitel" und verwende Natural Sort für die Standardreihenfolge.
+    mandatory_constraints:
+      - "Diese appspec ist fachliche Quelle der Wahrheit."
+      - "pixel_design.yaml ist visuelle Quelle der Wahrheit."
+      - "Keine yt-dlp-Integration implementieren."
+      - "Keine Pulliku-Abhängigkeit implementieren."
+      - "Keine Stilleerkennung oder KI-Kapitelermittlung für M4B implementieren."
+      - "Keine statische Any-to-Any-Matrix vortäuschen; Fähigkeiten zur Laufzeit aus Workern ermitteln."
+      - "Keine beliebigen Shellbefehle aus Nutzereingaben zulassen."
+      - "Jeden Adapter separat testen und Ausgabedateien validieren."
+      - "Technische Komplexität hinter Presets und progressiver Offenlegung verbergen."
+      - "Mobile-first entwickeln und die Desktopansicht als ruhiges Dashboard ausbauen."
+    first_milestone:
+      user_story: >-
+        Als angemeldeter Nutzer kann ich mehrere korrekt benannte MP3-Dateien
+        hochladen, ihre natürlich sortierte Reihenfolge und daraus abgeleiteten
+        Kapiteltitel prüfen, Metadaten und ein Cover ergänzen, eine M4B erzeugen
+        und die validierte Ergebnisdatei herunterladen.

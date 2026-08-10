@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+.env
+secrets/
+*.sqlite*
+.ishiku/reports/
+playwright-report/
+test-results/
+/input/
+/output/
+/data/

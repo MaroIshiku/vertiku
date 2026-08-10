@@ -1,0 +1,39 @@
+services:
+  vertiku:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vertiku:0.1.0
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${VERTIKU_PORT:-8080}:8080"
+    environment:
+      TZ: "${TZ:-Europe/Berlin}"
+      VERTIKU_SETUP_SECRET: "${VERTIKU_SETUP_SECRET:?Set VERTIKU_SETUP_SECRET in .env}"
+      VERTIKU_DATA_DIR: /data
+      VERTIKU_INPUT_DIR: /input
+      VERTIKU_OUTPUT_DIR: /output
+      VERTIKU_COOKIE_SECURE: "${VERTIKU_COOKIE_SECURE:-false}"
+      VERTIKU_MAX_UPLOAD_GIB: "${VERTIKU_MAX_UPLOAD_GIB:-10}"
+      VERTIKU_MAX_CONCURRENT_JOBS: "${VERTIKU_MAX_CONCURRENT_JOBS:-1}"
+    volumes:
+      - vertiku-data:/data
+      - ./input:/input:ro
+      - ./output:/output:rw
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  vertiku-data:
