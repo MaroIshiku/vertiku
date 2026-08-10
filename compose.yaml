@@ -38,7 +38,6 @@ services:
       VERTIKU_OUTPUT_DIR: /output
       VERTIKU_COOKIE_SECURE: "false"
       VERTIKU_MAX_UPLOAD_GIB: "10"
-      VERTIKU_MAX_CONCURRENT_JOBS: "1"
     volumes:
       - type: bind
         source: /DATA/AppData/i_vertiku/Data
@@ -72,9 +71,6 @@ services:
         - container: VERTIKU_MAX_UPLOAD_GIB
           description:
             en_us: Maximum source-file size in GiB
-        - container: VERTIKU_MAX_CONCURRENT_JOBS
-          description:
-            en_us: Number of simultaneous conversion jobs
       ports:
         - container: "8080"
           description:
@@ -110,10 +106,10 @@ x-casaos:
   tips:
     before_install:
       en_us: Replace ISHIKU_SETUP_SECRET before first start. Input folders belong in /DATA/AppData/i_vertiku/Input and converted files are written to /DATA/AppData/i_vertiku/Output. Back up /DATA/AppData/i_vertiku/Data and Output before every update.
-  version: "0.1.3"
+  version: "0.2.0"
   update_at: "2026-08-10"
   release_notes:
-    en_us: Fixes the HTTP blank page and the permanent installing state caused by a completed helper service.
+    en_us: Adds select-all batch review, context-aware chapter names, a strictly serial unattended queue, live job updates, and a new conversion activity signal.
   website: https://github.com/MaroIshiku/vertiku
   repo: https://github.com/MaroIshiku/vertiku
   support: https://github.com/MaroIshiku/vertiku/issues

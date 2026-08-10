@@ -1004,7 +1004,7 @@ appspec:
       max_files_per_batch: 500
       max_job_runtime_minutes: 360
       max_uncompressed_working_size_gib: 50
-      max_concurrent_jobs_global: 2
+      max_concurrent_jobs_global: 1
     malware_scanning:
       required_v1: false
       optional_integration: "ClamAV"
@@ -1337,7 +1337,8 @@ appspec:
         VERTIKU_MAX_UPLOAD_GIB:
           default: 10
         VERTIKU_MAX_CONCURRENT_JOBS:
-          default: 2
+          default: 1
+          maximum: 1
         VERTIKU_DEFAULT_RETENTION_HOURS:
           default: 24
         VERTIKU_LOG_LEVEL:

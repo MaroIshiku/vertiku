@@ -17,4 +17,8 @@ describe('runtime configuration', () => {
       ISHIKU_SETUP_SECRET: 'REPLACE-WITH-A-UNIQUE-SECRET-OF-AT-LEAST-32-CHARACTERS'
     })).toThrow('Replace the published setup-secret placeholder');
   });
+
+  it('rejects parallel conversion workers because Vertiku is intentionally serial', () => {
+    expect(() => loadConfig({ VERTIKU_MAX_CONCURRENT_JOBS: '2' })).toThrow();
+  });
 });

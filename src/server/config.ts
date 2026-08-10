@@ -18,7 +18,7 @@ const schema = z.object({
   VERTIKU_SETUP_SECRET: setupSecretSchema.optional(),
   VERTIKU_SETUP_SECRET_FILE: z.string().optional(),
   VERTIKU_MAX_UPLOAD_GIB: z.coerce.number().positive().max(100).default(10),
-  VERTIKU_MAX_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(8).default(1),
+  VERTIKU_MAX_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(1).default(1),
   VERTIKU_COOKIE_SECURE: z.enum(['true', 'false']).default('false'),
   FFMPEG_PATH: z.string().default('ffmpeg'),
   FFPROBE_PATH: z.string().default('ffprobe')

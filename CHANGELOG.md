@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.0 - 2026-08-10
+
+### Added
+
+- Added select-all batch review for up to 100 read-only `/input` audiobooks and one-action persistent enqueueing.
+- Added context-aware chapter inference that turns repeated numbered book filenames into distinct `Chapter N` titles and infers `Author - Title` folder metadata.
+- Added an owner-scoped live jobs feed and automatic history refresh.
+
+### Changed
+
+- Fixed conversion concurrency at exactly one for predictable unattended processing of large audiobooks.
+- Replaced the rotating working symbol with a reduced-motion-aware signal path that distinguishes queued, preparing, encoding, validating, and terminal states.
+
+### Security
+
+- Batch requests require CSRF proof, validate every folder and exact server-side filename set, reject duplicates or stale selections atomically, and store only references to the read-only input mount.
+
 ## 0.1.3 - 2026-08-10
 
 ### Fixed

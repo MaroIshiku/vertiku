@@ -14,6 +14,42 @@ export function chapterTitleFromFilename(filename: string): string {
     .trim() || 'Untitled chapter';
 }
 
+function comparable(value: string): string {
+  return value.normalize('NFKC').toLocaleLowerCase('en').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+export function bookMetadataFromFolderName(folderName: string): { title: string; author: string } {
+  const cleaned = folderName.replace(/[_]+/gu, ' ').replace(/\s+/gu, ' ').trim();
+  const separator = cleaned.indexOf(' - ');
+  if (separator <= 0 || separator >= cleaned.length - 3) return { title: cleaned || 'Untitled audiobook', author: '' };
+  return { author: cleaned.slice(0, separator).trim(), title: cleaned.slice(separator + 3).trim() };
+}
+
+export function chapterTitlesFromFilenames(filenames: string[], bookTitle = ''): string[] {
+  const parsed = filenames.map((filename, index) => {
+    const stem = basename(filename, extname(filename));
+    const match = stem.match(/^[\s._-]*(\d+)(?:[\s._-]+|$)/u);
+    return {
+      index,
+      number: match ? Number.parseInt(match[1]!, 10) : undefined,
+      title: chapterTitleFromFilename(filename)
+    };
+  });
+  const counts = new Map<string, number>();
+  for (const item of parsed) {
+    const key = comparable(item.title);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const normalizedBookTitle = comparable(bookTitle);
+  return parsed.map((item) => {
+    const key = comparable(item.title);
+    const repeated = (counts.get(key) ?? 0) > 1;
+    const merelyRepeatsBookTitle = parsed.length > 1 && normalizedBookTitle.length > 0 && key === normalizedBookTitle;
+    if (!repeated && !merelyRepeatsBookTitle) return item.title;
+    return `Chapter ${item.number ?? item.index + 1}`;
+  });
+}
+
 export function escapeFfmetadata(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/([=;#])/g, '\\$1').replace(/\r?\n/g, '\\n');
 }

@@ -12,7 +12,7 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { chapterTitleFromFilename, naturalSort, safeDownloadName } from '../domain/audiobook.js';
+import { bookMetadataFromFolderName, chapterTitlesFromFilenames, naturalSort, safeDownloadName } from '../domain/audiobook.js';
 import { openDatabase } from './database.js';
 import { convertToM4b, probeAudio } from './ffmpeg.js';
 import { filesForInputBook, scanInputBooks } from './input-library.js';
@@ -37,6 +37,20 @@ const startSchema = z.object({
   chapters: z.array(z.object({ sourceId: z.string().uuid(), title: z.string().trim().min(1).max(500) })).min(1).max(500)
 });
 const inputDraftSchema = z.object({ folderId: z.string().min(1).max(2000) });
+const batchStartSchema = z.object({
+  items: z.array(z.object({
+    folderId: z.string().min(1).max(2000),
+    title: z.string().trim().min(1).max(250),
+    author: z.string().trim().max(250).optional().default(''),
+    narrator: z.string().trim().max(250).optional().default(''),
+    year: z.string().trim().regex(/^$|^\d{4}$/).optional().default(''),
+    genre: z.string().trim().max(100).optional().default('Audiobook'),
+    description: z.string().trim().max(4000).optional().default(''),
+    bitrateKbps: z.union([z.literal(64), z.literal(96), z.literal(128)]).default(96),
+    destination: z.enum(['output', 'download']).default('output'),
+    chapters: z.array(z.object({ filename: z.string().min(1).max(1000), title: z.string().trim().min(1).max(500) })).min(1).max(500)
+  })).min(1).max(100)
+});
 type Session = { token_hash: string; account_id: number; csrf: string; expires_at: number; username: string; role: string };
 type DraftSource = { id: string; draft_id: string; original_name: string; storage_path: string; duration_ms: number; sort_order: number };
 type StoredChapter = { sourceId: string; title: string };
@@ -78,7 +92,7 @@ export async function buildApp(options: AppOptions) {
   mkdirSync(dirname(options.databasePath), { recursive: true });
   mkdirSync(uploadsDir, { recursive: true });
   mkdirSync(resultsDir, { recursive: true });
-  const app = Fastify({ logger: { redact: ['req.headers.cookie', 'req.headers.authorization', 'body.password', 'body.setupSecret'] }, trustProxy: false, bodyLimit: 1024 * 1024 });
+  const app = Fastify({ logger: { redact: ['req.headers.cookie', 'req.headers.authorization', 'body.password', 'body.setupSecret'] }, trustProxy: false, bodyLimit: 10 * 1024 * 1024 });
   const { sqlite } = openDatabase(options.databasePath);
   const cookieName = options.cookieSecure ? '__Host-vertiku_session' : 'vertiku_session';
   const children = new Map<string, ChildProcessWithoutNullStreams>();
@@ -121,18 +135,24 @@ export async function buildApp(options: AppOptions) {
 
   function publicJob(row: JobRow) {
     const position = row.status === 'queued' ? Number((sqlite.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status = 'queued' AND (created_at < ? OR (created_at = ? AND id <= ?))").get(row.created_at, row.created_at, row.id) as { count: number }).count) : undefined;
-    return { id: row.id, status: row.status, progress: row.progress, queuePosition: position, title: row.title, destination: row.destination, outputName: row.export_path ? basename(row.export_path) : undefined, error: row.error_message ? { code: row.error_code, message: row.error_message } : undefined, downloadReady: row.status === 'completed' && row.destination === 'download', createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString() };
+    const phase = row.status === 'running' ? (row.progress === 0 ? 'preparing' : row.progress < 96 ? 'encoding' : 'validating') : row.status;
+    return { id: row.id, status: row.status, phase, progress: row.progress, queuePosition: position, title: row.title, destination: row.destination, outputName: row.export_path ? basename(row.export_path) : undefined, error: row.error_message ? { code: row.error_code, message: row.error_message } : undefined, downloadReady: row.status === 'completed' && row.destination === 'download', createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString() };
   }
 
   async function cleanupUploadedDraft(draftId: string) {
     await rm(join(uploadsDir, draftId), { recursive: true, force: true });
   }
 
+  function sessionIsActive(session: Session): boolean {
+    const row = sqlite.prepare('SELECT expires_at FROM sessions WHERE token_hash = ?').get(session.token_hash) as { expires_at: number } | undefined;
+    return Boolean(row && row.expires_at > Date.now());
+  }
+
   async function runQueuedJob(jobId: string) {
     const job = sqlite.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as JobRow | undefined;
     if (!job) return;
     const draft = sqlite.prepare('SELECT id, cover_path FROM drafts WHERE id = ?').get(job.draft_id) as { id: string; cover_path: string | null } | undefined;
-    const rows = sqlite.prepare('SELECT * FROM draft_sources WHERE draft_id = ?').all(job.draft_id) as DraftSource[];
+    const rows = sqlite.prepare('SELECT * FROM draft_sources WHERE draft_id = ? ORDER BY sort_order').all(job.draft_id) as DraftSource[];
     let workingPath = job.output_path;
     try {
       if (!draft || rows.length === 0) throw new Error('The queued source draft is no longer available.');
@@ -140,6 +160,17 @@ export async function buildApp(options: AppOptions) {
       const metadata = JSON.parse(job.metadata_json) as StoredMetadata;
       const rowById = new Map(rows.map((row) => [row.id, row]));
       if (chapters.length !== rows.length || chapters.some((chapter) => !rowById.has(chapter.sourceId))) throw new Error('The queued chapter set is no longer valid.');
+      for (const row of rows) {
+        if (row.duration_ms > 0) continue;
+        const durationMs = await (options.probe ?? probeAudio)(options.ffprobePath ?? 'ffprobe', row.storage_path);
+        row.duration_ms = durationMs;
+        sqlite.prepare('UPDATE draft_sources SET duration_ms = ? WHERE id = ?').run(durationMs, row.id);
+        if ((sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(job.id) as { status: string } | undefined)?.status === 'cancelled') {
+          if (workingPath) await discardOutputWorkingPath(workingPath);
+          await cleanupUploadedDraft(job.draft_id);
+          return;
+        }
+      }
       workingPath = job.destination === 'output'
         ? await createOutputWorkingPath(outputDir, job.id)
         : (job.output_path ?? join(resultsDir, job.id, safeDownloadName(job.title)));
@@ -188,7 +219,7 @@ export async function buildApp(options: AppOptions) {
   }
 
   sqlite.prepare("UPDATE jobs SET status = 'queued', progress = 0, error_code = NULL, error_message = NULL, updated_at = ? WHERE status = 'running'").run(Date.now());
-  const workQueue = createWorkQueue({ concurrency: options.maxConcurrentJobs ?? 2, claim: claimQueuedJob, run: runQueuedJob });
+  const workQueue = createWorkQueue({ concurrency: 1, claim: claimQueuedJob, run: runQueuedJob });
 
   app.setErrorHandler((error, request, reply) => {
     request.log.error({ err: error }, 'Request failed');
@@ -258,7 +289,8 @@ export async function buildApp(options: AppOptions) {
         sorted.forEach((source, index) => insert.run(source.id, draftId, source.originalName, source.storagePath, source.durationMs, index));
         sqlite.exec('COMMIT');
       } catch (error) { sqlite.exec('ROLLBACK'); throw error; }
-      return reply.code(201).send({ id: draftId, cover: Boolean(coverPath), sources: sorted.map((source) => ({ id: source.id, filename: source.originalName, title: chapterTitleFromFilename(source.originalName), durationMs: source.durationMs, duration: formatDuration(source.durationMs) })) });
+      const titles = chapterTitlesFromFilenames(sorted.map((source) => source.originalName));
+      return reply.code(201).send({ id: draftId, cover: Boolean(coverPath), sources: sorted.map((source, index) => ({ id: source.id, filename: source.originalName, title: titles[index], durationMs: source.durationMs, duration: formatDuration(source.durationMs) })) });
     } catch (error) {
       await rm(draftDir, { recursive: true, force: true });
       return reply.code(400).send({ code: 'INVALID_FILE', message: error instanceof Error ? error.message : 'The files could not be analyzed.', requestId: request.id });
@@ -267,7 +299,11 @@ export async function buildApp(options: AppOptions) {
 
   app.get('/api/input-books', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
     const session = requireSession(request, reply); if (!session) return reply;
-    const books = scanInputBooks(inputDir).map(({ coverPath: _coverPath, files: _files, ...book }) => book);
+    const books = scanInputBooks(inputDir).map(({ coverPath: _coverPath, files, ...book }) => {
+      const suggested = bookMetadataFromFolderName(book.title);
+      const titles = chapterTitlesFromFilenames(files, suggested.title);
+      return { ...book, suggestedTitle: suggested.title, suggestedAuthor: suggested.author, chapters: files.map((filename, index) => ({ filename, title: titles[index]! })) };
+    });
     return { mounted: existsSync(inputDir), rootLabel: '/input', books };
   });
 
@@ -279,15 +315,54 @@ export async function buildApp(options: AppOptions) {
       const selected = filesForInputBook(inputDir, input.data.folderId);
       if (!selected.files.length) return reply.code(404).send({ code: 'INPUT_BOOK_EMPTY', message: 'No supported audio files were found in this folder.', requestId: request.id });
       if (selected.files.length > 500) return reply.code(400).send({ code: 'INPUT_BOOK_TOO_LARGE', message: 'An input folder may contain at most 500 audio files.', requestId: request.id });
-      const analyzed = await Promise.all(selected.files.map(async (file) => ({ id: randomUUID(), originalName: file.name, storagePath: file.path, durationMs: await (options.probe ?? probeAudio)(options.ffprobePath ?? 'ffprobe', file.path) })));
+      const analyzed: Array<{ id: string; originalName: string; storagePath: string; durationMs: number }> = [];
+      for (const file of selected.files) analyzed.push({ id: randomUUID(), originalName: file.name, storagePath: file.path, durationMs: await (options.probe ?? probeAudio)(options.ffprobePath ?? 'ffprobe', file.path) });
       const draftId = randomUUID(); sqlite.exec('BEGIN IMMEDIATE');
       try {
         sqlite.prepare('INSERT INTO drafts (id, owner_id, cover_path, created_at) VALUES (?, ?, ?, ?)').run(draftId, session.account_id, selected.coverPath ?? null, Date.now());
         const insert = sqlite.prepare('INSERT INTO draft_sources (id, draft_id, original_name, storage_path, duration_ms, sort_order) VALUES (?, ?, ?, ?, ?, ?)');
         analyzed.forEach((source, index) => insert.run(source.id, draftId, source.originalName, source.storagePath, source.durationMs, index)); sqlite.exec('COMMIT');
       } catch (error) { sqlite.exec('ROLLBACK'); throw error; }
-      return reply.code(201).send({ id: draftId, cover: Boolean(selected.coverPath), sources: analyzed.map((source) => ({ id: source.id, filename: source.originalName, title: chapterTitleFromFilename(source.originalName), durationMs: source.durationMs, duration: formatDuration(source.durationMs) })) });
+      const suggested = bookMetadataFromFolderName(basename(selected.folder));
+      const titles = chapterTitlesFromFilenames(analyzed.map((source) => source.originalName), suggested.title);
+      return reply.code(201).send({ id: draftId, cover: Boolean(selected.coverPath), suggestedTitle: suggested.title, suggestedAuthor: suggested.author, sources: analyzed.map((source, index) => ({ id: source.id, filename: source.originalName, title: titles[index], durationMs: source.durationMs, duration: formatDuration(source.durationMs) })) });
     } catch (error) { return reply.code(400).send({ code: 'INPUT_BOOK_INVALID', message: error instanceof Error ? error.message : 'The input folder could not be analyzed.', requestId: request.id }); }
+  });
+
+  app.post('/api/jobs/from-input/batch', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
+    const session = requireSession(request, reply, true); if (!session) return reply;
+    const input = batchStartSchema.safeParse(request.body);
+    if (!input.success) return reply.code(400).send({ code: 'VALIDATION_FAILED', message: 'Review every selected audiobook and chapter title.', requestId: request.id, fieldErrors: input.error.flatten().fieldErrors });
+    if (new Set(input.data.items.map((item) => item.folderId)).size !== input.data.items.length) return reply.code(400).send({ code: 'BATCH_DUPLICATE_BOOK', message: 'Each input folder may appear only once in a batch.', requestId: request.id });
+    try {
+      const prepared = input.data.items.map((item, batchIndex) => {
+        const selected = filesForInputBook(inputDir, item.folderId);
+        if (!selected.files.length || selected.files.length > 500) throw new Error('Each selected folder must contain between 1 and 500 supported audio files.');
+        const submitted = new Map(item.chapters.map((chapter) => [chapter.filename, chapter.title]));
+        if (submitted.size !== selected.files.length || item.chapters.length !== selected.files.length || selected.files.some((file) => !submitted.has(file.name))) throw new Error(`The chapter files changed in ${item.folderId}. Refresh the input library and review it again.`);
+        const draftId = randomUUID(); const jobId = randomUUID(); const now = Date.now() + batchIndex;
+        const sources = selected.files.map((file, index) => ({ id: randomUUID(), originalName: file.name, storagePath: file.path, title: submitted.get(file.name)!, sortOrder: index }));
+        const metadata: StoredMetadata = { title: item.title, author: item.author, narrator: item.narrator, year: item.year, genre: item.genre, description: item.description };
+        const chapters: StoredChapter[] = sources.map((source) => ({ sourceId: source.id, title: source.title }));
+        const outputPath = item.destination === 'output' ? join(outputDir, `.vertiku-${jobId}.partial.m4b`) : join(resultsDir, jobId, safeDownloadName(item.title));
+        return { item, selected, draftId, jobId, now, sources, metadata, chapters, outputPath };
+      });
+      sqlite.exec('BEGIN IMMEDIATE');
+      try {
+        const insertDraft = sqlite.prepare('INSERT INTO drafts (id, owner_id, cover_path, created_at) VALUES (?, ?, ?, ?)');
+        const insertSource = sqlite.prepare('INSERT INTO draft_sources (id, draft_id, original_name, storage_path, duration_ms, sort_order) VALUES (?, ?, ?, ?, 0, ?)');
+        const insertJob = sqlite.prepare("INSERT INTO jobs (id, draft_id, owner_id, status, progress, title, destination, bitrate_kbps, metadata_json, chapters_json, output_path, created_at, updated_at) VALUES (?, ?, ?, 'queued', 0, ?, ?, ?, ?, ?, ?, ?, ?)");
+        for (const entry of prepared) {
+          insertDraft.run(entry.draftId, session.account_id, entry.selected.coverPath ?? null, entry.now);
+          for (const source of entry.sources) insertSource.run(source.id, entry.draftId, source.originalName, source.storagePath, source.sortOrder);
+          insertJob.run(entry.jobId, entry.draftId, session.account_id, entry.item.title, entry.item.destination, entry.item.bitrateKbps, JSON.stringify(entry.metadata), JSON.stringify(entry.chapters), entry.outputPath, entry.now, entry.now);
+        }
+        sqlite.exec('COMMIT');
+      } catch (error) { sqlite.exec('ROLLBACK'); throw error; }
+      workQueue.wake();
+      const jobs = prepared.map((entry) => publicJob(sqlite.prepare('SELECT * FROM jobs WHERE id = ?').get(entry.jobId) as JobRow));
+      return reply.code(202).send({ accepted: jobs.length, jobs });
+    } catch (error) { return reply.code(400).send({ code: 'BATCH_INVALID', message: error instanceof Error ? error.message : 'The batch could not be queued.', requestId: request.id }); }
   });
 
   app.post('/api/jobs', { config: { rateLimit: { max: 20, timeWindow: '5 minutes' } } }, async (request, reply) => {
@@ -313,13 +388,20 @@ export async function buildApp(options: AppOptions) {
     return reply.code(202).send(publicJob(queued));
   });
 
-  app.get('/api/jobs', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 50').all(session.account_id) as JobRow[]; return { jobs: rows.map(publicJob) }; });
+  app.get('/api/jobs', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; return { jobs: rows.map(publicJob) }; });
+  app.get('/api/jobs/events', async (request, reply) => {
+    const session = requireSession(request, reply); if (!session) return reply;
+    reply.hijack(); reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
+    let previous = '';
+    const send = () => { if (!sessionIsActive(session)) { clearInterval(timer); reply.raw.end(); return; } const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const data = JSON.stringify({ jobs: rows.map(publicJob) }); if (data !== previous) { previous = data; reply.raw.write(`event: jobs\ndata: ${data}\n\n`); } };
+    const timer = setInterval(send, 750); send(); request.raw.on('close', () => clearInterval(timer)); return reply;
+  });
   app.get('/api/jobs/:id', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ?').get(id, session.account_id) as JobRow | undefined; return row ? publicJob(row) : reply.code(404).send({ code: 'JOB_NOT_FOUND', message: 'The job was not found.', requestId: request.id }); });
   app.get('/api/jobs/:id/events', async (request, reply) => {
     const session = requireSession(request, reply); if (!session) return reply;
     const { id } = request.params as { id: string }; const exists = sqlite.prepare('SELECT id FROM jobs WHERE id = ? AND owner_id = ?').get(id, session.account_id); if (!exists) return reply.code(404).send({ code: 'JOB_NOT_FOUND', message: 'The job was not found.', requestId: request.id });
     reply.hijack(); reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
-    const send = () => { const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ?').get(id, session.account_id) as JobRow | undefined; if (!row) return; reply.raw.write(`event: job\ndata: ${JSON.stringify(publicJob(row))}\n\n`); if (['completed', 'failed', 'cancelled'].includes(row.status)) { clearInterval(timer); reply.raw.end(); } };
+    const send = () => { if (!sessionIsActive(session)) { clearInterval(timer); reply.raw.end(); return; } const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ?').get(id, session.account_id) as JobRow | undefined; if (!row) return; reply.raw.write(`event: job\ndata: ${JSON.stringify(publicJob(row))}\n\n`); if (['completed', 'failed', 'cancelled'].includes(row.status)) { clearInterval(timer); reply.raw.end(); } };
     const timer = setInterval(send, 750); send(); request.raw.on('close', () => clearInterval(timer)); return reply;
   });
   app.post('/api/jobs/:id/cancel', async (request, reply) => { const session = requireSession(request, reply, true); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare("SELECT id, draft_id, status, output_path FROM jobs WHERE id = ? AND owner_id = ? AND status IN ('queued','running')").get(id, session.account_id) as { id: string; draft_id: string; status: string; output_path: string | null } | undefined; if (!row) return reply.code(409).send({ code: 'JOB_NOT_CANCELLABLE', message: 'This job cannot be cancelled.', requestId: request.id }); sqlite.prepare("UPDATE jobs SET status = 'cancelled', error_code = NULL, error_message = NULL, updated_at = ? WHERE id = ?").run(Date.now(), id); if (row.status === 'queued') { if (row.output_path) await discardOutputWorkingPath(row.output_path); await cleanupUploadedDraft(row.draft_id); } children.get(id)?.kill('SIGTERM'); workQueue.wake(); return reply.code(202).send({ id, status: 'cancelled' }); });

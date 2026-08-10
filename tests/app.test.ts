@@ -72,6 +72,38 @@ describe('platform and identity endpoints', () => {
 });
 
 describe('persistent conversion queue', () => {
+  it('reviews an entire input batch and always analyzes and converts one book at a time', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'vertiku-batch-')); directories.push(dataDir);
+    const inputDir = join(dataDir, 'input'); const outputDir = join(dataDir, 'output');
+    mkdirSync(join(inputDir, 'Dan Simmons - Drood'), { recursive: true }); mkdirSync(join(inputDir, 'Second Author - Second Book'), { recursive: true });
+    writeFileSync(join(inputDir, 'Dan Simmons - Drood', '001 - Drood.mp3'), 'synthetic'); writeFileSync(join(inputDir, 'Dan Simmons - Drood', '002 - Drood.mp3'), 'synthetic');
+    writeFileSync(join(inputDir, 'Second Author - Second Book', '01 - Opening.mp3'), 'synthetic');
+    const releases: Array<() => void> = []; let active = 0; let maximumActive = 0;
+    const app = await buildApp({
+      databasePath: join(dataDir, 'vertiku.sqlite'), dataDir, inputDir, outputDir, cookieSecure: false, setupSecret: 'synthetic-setup-secret-value', maxConcurrentJobs: 8,
+      probe: async () => 1_000,
+      convert: async (input) => { active += 1; maximumActive = Math.max(maximumActive, active); await new Promise<void>((resolve) => releases.push(resolve)); writeFileSync(input.outputPath, 'validated batch audiobook'); active -= 1; }
+    }); apps.push(app);
+    const credentials = { username: 'admin', password: 'synthetic-password-123', setupSecret: 'synthetic-setup-secret-value' };
+    await app.inject({ method: 'POST', url: '/api/setup', payload: credentials });
+    const login = await app.inject({ method: 'POST', url: '/api/session', payload: { username: credentials.username, password: credentials.password } });
+    const cookie = `${login.cookies[0]!.name}=${login.cookies[0]!.value}`; const csrf = login.json().csrf as string;
+    const library = (await app.inject({ method: 'GET', url: '/api/input-books', headers: { cookie } })).json().books as Array<{ id: string; suggestedTitle: string; suggestedAuthor: string; chapters: Array<{ filename: string; title: string }> }>;
+    expect(library[0]).toMatchObject({ suggestedTitle: 'Drood', suggestedAuthor: 'Dan Simmons', chapters: [{ title: 'Chapter 1' }, { title: 'Chapter 2' }] });
+    const items = library.map((book) => ({ folderId: book.id, title: book.suggestedTitle, author: book.suggestedAuthor, destination: 'output', bitrateKbps: 96, chapters: book.chapters }));
+    expect((await app.inject({ method: 'POST', url: '/api/jobs/from-input/batch', headers: { cookie }, payload: { items } })).statusCode).toBe(403);
+    const stale = structuredClone(items); stale[0]!.chapters = stale[0]!.chapters.slice(1);
+    expect((await app.inject({ method: 'POST', url: '/api/jobs/from-input/batch', headers: { cookie, 'x-csrf-token': csrf }, payload: { items: stale } })).statusCode).toBe(400);
+    expect(((await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().jobs as unknown[])).toHaveLength(0);
+    const queued = await app.inject({ method: 'POST', url: '/api/jobs/from-input/batch', headers: { cookie, 'x-csrf-token': csrf }, payload: { items } });
+    expect(queued.statusCode).toBe(202); expect(queued.json().accepted).toBe(2);
+    await waitFor(() => releases.length === 1); expect(maximumActive).toBe(1); releases[0]!();
+    await waitFor(() => releases.length === 2); expect(maximumActive).toBe(1); releases[1]!();
+    await waitFor(async () => ((await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().jobs as Array<{ status: string }>).every((job) => job.status === 'completed'));
+    expect(existsSync(join(inputDir, 'Dan Simmons - Drood', '001 - Drood.mp3'))).toBe(true);
+    expect(readdirSync(join(dataDir, 'uploads'))).toHaveLength(0);
+  });
+
   it('queues FIFO with bounded concurrency and publishes output without a data result copy', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'vertiku-queue-')); directories.push(dataDir);
     const inputDir = join(dataDir, 'input'); const outputDir = join(dataDir, 'output');
