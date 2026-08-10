@@ -40,12 +40,12 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          tags: ghcr.io/maroishiku/vertiku:${{ github.ref_name }}
           provenance: mode=max
           sbom: true
       - name: Attest image provenance
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
         with:
-          subject-name: ghcr.io/${{ github.repository }}
+          subject-name: ghcr.io/maroishiku/vertiku
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true

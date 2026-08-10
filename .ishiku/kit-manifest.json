@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "kit_version": "1.0.0",
+  "kit_version": "1.0.1",
   "managed": [
     {
       "path": ".agents/skills/ishiku-design-review/agents/openai.yaml",
@@ -24,7 +24,7 @@
     },
     {
       "path": ".agents/skills/ishiku-github-release/SKILL.md",
-      "sha256": "f7ee5b0d25798d32749808a10d5e62fbb48e3273a7030e6b1bc180ae9f134dd0"
+      "sha256": "c6968687a480d859c4bf67ad5a09e5f502d9074da2dc3d51925b36858ed8f16b"
     },
     {
       "path": ".agents/skills/ishiku-modernize-app/agents/openai.yaml",
@@ -40,7 +40,7 @@
     },
     {
       "path": ".agents/skills/ishiku-new-app/SKILL.md",
-      "sha256": "7cbdca648577367895b526ed66f9a79afdbf66641be08407fe54e76b345acb89"
+      "sha256": "4de1782c4e31028b822daa3c01730943763bb068dc46a633b2e657afdd80e4e2"
     },
     {
       "path": ".agents/skills/ishiku-orchestrator/agents/openai.yaml",
@@ -48,7 +48,7 @@
     },
     {
       "path": ".agents/skills/ishiku-orchestrator/SKILL.md",
-      "sha256": "a20b7b3814fdd74d708d1932c6fafb95358b66e654cc7d47ab1c956e5fc113d9"
+      "sha256": "a62ac8ffb958dc413514fa5796f485abe39f79eedb70d9f317665d5cd5f13eed"
     },
     {
       "path": ".agents/skills/ishiku-project-analysis/agents/openai.yaml",
@@ -72,7 +72,7 @@
     },
     {
       "path": ".agents/skills/ishiku-test-engineer/SKILL.md",
-      "sha256": "db0cd4f6fe6781439bb2676cf4ff32a8c0263866f779139445fe50c7ec69380e"
+      "sha256": "bc06757065eb9d992b6836e22e2ea1645a285cfd6b769a1d54083605b4b93469"
     },
     {
       "path": ".agents/skills/ishiku-upstream-maintenance/agents/openai.yaml",
@@ -80,7 +80,7 @@
     },
     {
       "path": ".agents/skills/ishiku-upstream-maintenance/SKILL.md",
-      "sha256": "7afbd4a629cafef43c1a67f897cf70a01b21b5bafbd166c01f82e62b0f7ba4d5"
+      "sha256": "db8985e0b4aeca8b7a75f81a2f81de1f1abf82d394fdd770b0628c86d7829100"
     },
     {
       "path": ".github/workflows/ishiku-pull-request-verify.yml",
@@ -88,7 +88,7 @@
     },
     {
       "path": ".github/workflows/ishiku-release-release.yml",
-      "sha256": "0f7acba4965aa4f23ca0f01db6b6e7aa67c9c388a5b7834961205d067ae7aa5b"
+      "sha256": "9671c33a15e089d0c3cb6e05cd2c6dbda72ddbdb223e1329323fca6561dcb590"
     },
     {
       "path": ".github/workflows/ishiku-upstream-update-upstream-update.yml",
@@ -104,7 +104,7 @@
     },
     {
       "path": ".ishiku/kit/policies/definition-of-done.md",
-      "sha256": "043c62026cb99d26572c5e4ee6e07bd057c296d17fa788ad3304f5a4ce67e4f3"
+      "sha256": "385c2655b3f9bfdefc8c24239bdff928d1e0c55743866569889ccae04606e128"
     },
     {
       "path": ".ishiku/kit/policies/dependencies.yaml",
@@ -116,7 +116,7 @@
     },
     {
       "path": ".ishiku/kit/policies/releases.md",
-      "sha256": "d6216aefcaf6c7ffdc5c34728dcb9813d4be3cb2dbd9debe5b4cb9bc23e8c5ae"
+      "sha256": "a8c2c34c27c367dd4b7e1aaccd55b1056d1d89c8d0ba0e7da5c93c1e8a15acd2"
     },
     {
       "path": ".ishiku/kit/policies/security.md",
@@ -124,7 +124,7 @@
     },
     {
       "path": ".ishiku/kit/policies/testing.md",
-      "sha256": "413d7b524f0cad4e24e10fa56d143230e89f492cf8890710a645b00a0651e6d8"
+      "sha256": "1d34694dfbdbe51201c5a345760318124d72b0c3baa79fc80873c1c0defde1ac"
     },
     {
       "path": ".ishiku/kit/schemas/appspec.schema.json",
@@ -144,7 +144,7 @@
     },
     {
       "path": ".ishiku/kit/schemas/project.schema.json",
-      "sha256": "441b4c8c35a2917068afe9f9d201440657d86db284aa6c6685be78554440e4fb"
+      "sha256": "a6b52892091922c839679effca66333c247f99497fad48a3802417d39efbff1f"
     },
     {
       "path": ".ishiku/kit/schemas/traceability.schema.json",
@@ -192,11 +192,7 @@
     },
     {
       "path": ".ishiku/kit/scripts/ishiku.mjs",
-      "sha256": "0580ffc1f1402200401fd193c220fa0aa1a93e6c5d6661d2a1c235a200381977"
-    },
-    {
-      "path": ".ishiku/kit/scripts/soak-test",
-      "sha256": "e18cdad31a06271461929407eebc779d0d0a7f2f409e045d48cae895fadf219f"
+      "sha256": "b92edef465513aaa5322ad795c524c1b34b4d13201bb9cfc6e92942560e25369"
     },
     {
       "path": ".ishiku/kit/scripts/verify-app",
@@ -204,7 +200,7 @@
     },
     {
       "path": ".ishiku/kit/version.yaml",
-      "sha256": "3c08f76fe8f3e1d130e645e5c09dd5a74e1701f7c9ca0aa649ad9c7202e115f4"
+      "sha256": "de409bec6707d051a5ab103f2dc75c18166510164df922f6bf2f403d0ce3e039"
     }
   ],
   "application_owned": [
