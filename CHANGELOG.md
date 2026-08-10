@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3 - 2026-08-10
+
+### Fixed
+
+- Stopped the HTTP ZimaOS deployment from upgrading its own browser assets to unavailable HTTPS URLs, which caused a blank page while the API remained healthy.
+- Preserved `upgrade-insecure-requests` for deployments that explicitly enable secure-cookie HTTPS mode.
+- Replaced the completed permissions helper service with an in-service ownership bootstrap so ZimaOS no longer remains in an installing state; the application process still runs as UID/GID 1000 with an empty capability set.
+
 ## 0.1.2 - 2026-08-10
 
 ### Changed

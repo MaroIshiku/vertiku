@@ -7,8 +7,16 @@ describe('primary ZimaOS Compose policy', () => {
 
   it('uses direct values without interpolation variables', () => {
     expect(compose).not.toContain('${');
-    expect(compose.match(/image: ghcr\.io\/maroishiku\/vertiku:latest/g)).toHaveLength(2);
+    expect(compose.match(/image: ghcr\.io\/maroishiku\/vertiku:latest/g)).toHaveLength(1);
     expect(compose).toContain('ISHIKU_SETUP_SECRET: "REPLACE-WITH-A-UNIQUE-SECRET-OF-AT-LEAST-32-CHARACTERS"');
+  });
+
+  it('uses one persistent ZimaOS service and drops startup privileges before running Vertiku', () => {
+    expect(compose).not.toContain('vertiku-permissions');
+    expect(compose).not.toContain('service_completed_successfully');
+    expect(compose).toContain('setpriv --reuid=1000 --regid=1000 --clear-groups');
+    expect(compose).toContain('--bounding-set=-all');
+    expect(compose).toContain('--no-new-privs ./node_modules/.bin/tsx src/server/index.ts');
   });
 
   it('declares the fixed ZimaOS port, storage root, and HTTPS icon', () => {
