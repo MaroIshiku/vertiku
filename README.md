@@ -13,8 +13,10 @@ The interface is mobile-first and expands into a focused desktop workspace. Scre
 - One input file becomes exactly one M4B chapter.
 - Every audio-containing folder below the read-only `/input` mount is treated as a separate audiobook.
 - Natural filename order puts `Part 2` before `Part 10`.
+- Repeated book names such as `001 - Drood.mp3` become distinct `Chapter 1`, `Chapter 2`, and later titles.
 - Editable chapter order, titles, book metadata, cover, and quality preset.
-- A persistent FIFO conversion queue with configurable worker concurrency, live progress, cancellation, restart recovery, job history, and owner-only downloads.
+- Select any number of `/input` books, including all of them, review them together, and enqueue the complete batch with one action.
+- A persistent strictly serial FIFO conversion queue with live progress, cancellation, restart recovery, job history, and owner-only downloads.
 - Runtime validation of duration, chapter count, chapter titles, and title metadata.
 - One-time administrator setup, Argon2id passwords, revocable sessions, and CSRF protection.
 - Six ishiku themes with light, dark, and system appearance.
@@ -63,7 +65,7 @@ Each folder directly below the input path is treated as a separate audiobook. Th
 
 ## Environment variables
 
-See [.env.example](.env.example) for local development or an optional external-environment deployment. For Docker Compose or Portainer, copy it to the ignored `.env` file and replace the `environment:` mapping in a separate local Compose variant with `env_file: [.env]`. Important values are `ISHIKU_SETUP_SECRET`, `VERTIKU_DATA_DIR`, `VERTIKU_DATABASE_URL`, `VERTIKU_MAX_UPLOAD_GIB`, `VERTIKU_MAX_CONCURRENT_JOBS`, and `VERTIKU_COOKIE_SECURE`. Existing deployments may continue to use the legacy `VERTIKU_SETUP_SECRET` name. The primary ZimaOS `compose.yaml` always uses direct values instead.
+See [.env.example](.env.example) for local development or an optional external-environment deployment. For Docker Compose or Portainer, copy it to the ignored `.env` file and replace the `environment:` mapping in a separate local Compose variant with `env_file: [.env]`. Important values are `ISHIKU_SETUP_SECRET`, `VERTIKU_DATA_DIR`, `VERTIKU_DATABASE_URL`, `VERTIKU_MAX_UPLOAD_GIB`, and `VERTIKU_COOKIE_SECURE`. Existing deployments may continue to use the legacy `VERTIKU_SETUP_SECRET` name. The primary ZimaOS `compose.yaml` always uses direct values instead. Conversion concurrency is intentionally fixed at one so large books never compete for CPU, memory, or disk throughput.
 
 ## Workers and engines
 
@@ -71,12 +73,12 @@ This milestone runs a local FFmpeg adapter in the core container. FFmpeg and ffp
 
 ## M4B workflow
 
-1. Select an audiobook folder below `/input`, or select/drop local audio files and optionally add a cover.
+1. Select one or more audiobook folders below `/input`—including **Select all**—or select/drop local audio files and optionally add a cover.
 2. Vertiku probes and naturally sorts the files. Browser uploads are stored once until their job ends; `/input` files are referenced in place without an application-side copy.
-3. Review the exact chapter order and edit every title.
+3. Review one book in detail or use the compact batch review to check all selected books together.
 4. Add book metadata and choose 64, 96, or 128 kbps AAC.
 5. Keep the default `/output` destination or choose an authenticated browser download.
-6. Start the job. It enters the persistent FIFO queue (one worker by default), shows its position and live progress, and can be cancelled while queued or running.
+6. Start one job or enqueue the complete batch. The persistent FIFO queue always runs exactly one audiobook at a time, keeps working without an open browser, shows live position and progress, and supports cancellation.
 7. Vertiku publishes or offers the M4B only after validation succeeds. Interrupted running jobs return to the queue after restart.
 
 There is no silence detection, transcription, online chapter lookup, media URL input, or hidden multi-stage conversion.

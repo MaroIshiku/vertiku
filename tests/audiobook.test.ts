@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildFfmetadata, chapterTitleFromFilename, naturalSort, safeDownloadName } from '../src/domain/audiobook.js';
+import { bookMetadataFromFolderName, buildFfmetadata, chapterTitleFromFilename, chapterTitlesFromFilenames, naturalSort, safeDownloadName } from '../src/domain/audiobook.js';
 import { convertToM4b, probeAudio } from '../src/server/ffmpeg.js';
 
 const directories: string[] = [];
@@ -21,6 +21,12 @@ describe('audiobook chapter model', () => {
     const metadata = buildFfmetadata({ title: 'Book=One;#' }, [{ title: 'Part=1', durationMs: 1250 }, { title: 'Part 2', durationMs: 2500 }]);
     expect(metadata).toContain('title=Book\\=One\\;\\#');
     expect(metadata).toContain('START=1250\nEND=3750');
+  });
+
+  it('uses chapter numbers when every filename merely repeats the book title', () => {
+    expect(chapterTitlesFromFilenames(['001 - Drood.mp3', '002 - Drood.mp3', '003 - Drood.mp3'], 'Drood')).toEqual(['Chapter 1', 'Chapter 2', 'Chapter 3']);
+    expect(chapterTitlesFromFilenames(['01 - Prologue.mp3', '02 - Arrival.mp3'], 'Example')).toEqual(['Prologue', 'Arrival']);
+    expect(bookMetadataFromFolderName('Dan Simmons - Drood')).toEqual({ author: 'Dan Simmons', title: 'Drood' });
   });
 
   it('removes path and control characters from download names', () => {
