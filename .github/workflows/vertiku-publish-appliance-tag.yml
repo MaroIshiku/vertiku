@@ -1,0 +1,48 @@
+name: Vertiku publish appliance tag
+
+on:
+  workflow_run:
+    workflows: ['ishiku release']
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  publish-latest:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out the released commit and tags
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - name: Resolve the release tag
+        id: release
+        env:
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          release_tag="$(git tag --points-at "$RELEASE_SHA" --list 'v*.*.*' --sort=-v:refname | head -n 1)"
+          test -n "$release_tag"
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Publish the ZimaOS appliance tag without rebuilding
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          docker buildx imagetools create \
+            --tag ghcr.io/maroishiku/vertiku:latest \
+            "ghcr.io/maroishiku/vertiku:${RELEASE_TAG}"
+          docker buildx imagetools inspect ghcr.io/maroishiku/vertiku:latest

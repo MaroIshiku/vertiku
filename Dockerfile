@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.18
-FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS dependencies
+FROM node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d804695b1b24a47daa5fb60e74d AS dependencies
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -10,7 +10,7 @@ COPY src ./src
 COPY public ./public
 RUN npm run build && npm prune --omit=dev
 
-FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS runtime
+FROM node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d804695b1b24a47daa5fb60e74d AS runtime
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     VERTIKU_PORT=8080 \
@@ -18,7 +18,11 @@ ENV NODE_ENV=production \
     VERTIKU_COOKIE_SECURE=false
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+ && dpkg --purge --force-depends --force-remove-essential perl-base \
+ && rm -rf /var/lib/apt/lists/* \
+              /usr/local/lib/node_modules/npm \
+              /usr/local/bin/npm \
+              /usr/local/bin/npx
 WORKDIR /app
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/package.json ./package.json

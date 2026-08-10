@@ -181,12 +181,13 @@ export async function buildApp(options: AppOptions) {
   app.setErrorHandler((error, request, reply) => {
     request.log.error({ err: error }, 'Request failed');
     if (error && typeof error === 'object' && 'code' in error && error.code === 'FST_REQ_FILE_TOO_LARGE') return reply.code(413).send({ code: 'UPLOAD_TOO_LARGE', message: 'One of the selected files exceeds the configured upload limit.', requestId: request.id });
+    if (error && typeof error === 'object' && 'statusCode' in error && error.statusCode === 429) return reply.code(429).send({ code: 'RATE_LIMITED', message: 'Too many requests. Try again later.', requestId: request.id });
     return reply.code(500).send({ code: 'INTERNAL_ERROR', message: 'Vertiku could not complete the request.', requestId: request.id });
   });
 
   app.get('/health', async () => ({ status: 'ok' }));
   app.get('/health/live', async () => ({ status: 'ok' }));
-  app.get('/health/ready', async (_request, reply) => {
+  app.get('/health/ready', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (_request, reply) => {
     try { sqlite.prepare('SELECT 1').get(); return { status: 'ready', database: 'ok', storage: 'ok', input: existsSync(inputDir) ? 'mounted' : 'not-mounted', output: existsSync(outputDir) ? 'mounted' : 'not-mounted' }; } catch { return reply.code(503).send({ status: 'not-ready' }); }
   });
   app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.1.0', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
@@ -196,7 +197,7 @@ export async function buildApp(options: AppOptions) {
     if ((sqlite.prepare('SELECT COUNT(*) AS count FROM accounts').get() as { count: number }).count > 0) return reply.code(409).send({ code: 'SETUP_CLOSED', message: 'Initial setup is already complete.', requestId: request.id });
     const input = setupSchema.safeParse(request.body);
     if (!input.success) return reply.code(400).send({ code: 'VALIDATION_FAILED', message: 'Enter a username, a password of at least 12 characters, and the setup secret.', requestId: request.id });
-    if (!options.setupSecret) return reply.code(503).send({ code: 'SETUP_SECRET_MISSING', message: 'The server administrator must configure VERTIKU_SETUP_SECRET.', requestId: request.id });
+    if (!options.setupSecret) return reply.code(503).send({ code: 'SETUP_SECRET_MISSING', message: 'The server administrator must configure ISHIKU_SETUP_SECRET.', requestId: request.id });
     if (!secretMatches(input.data.setupSecret, options.setupSecret) || input.data.password === input.data.setupSecret) return reply.code(403).send({ code: 'SETUP_DENIED', message: 'Setup could not be authorized.', requestId: request.id });
     const passwordHash = await argon2.hash(input.data.password, { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 });
     sqlite.prepare("INSERT INTO accounts (username, password_hash, role) VALUES (?, ?, 'admin')").run(input.data.username, passwordHash);
@@ -217,7 +218,7 @@ export async function buildApp(options: AppOptions) {
   app.get('/api/session', async (request, reply) => { const session = requireSession(request, reply); return session ? { csrf: session.csrf, user: { username: session.username, role: session.role } } : reply; });
   app.delete('/api/session', async (request, reply) => { const session = requireSession(request, reply, true); if (!session) return reply; sqlite.prepare('DELETE FROM sessions WHERE token_hash = ?').run(session.token_hash); reply.clearCookie(cookieName, { path: '/' }); return reply.code(204).send(); });
 
-  app.post('/api/drafts', async (request, reply) => {
+  app.post('/api/drafts', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
     const session = requireSession(request, reply, true); if (!session) return reply;
     const draftId = randomUUID(); const draftDir = join(uploadsDir, draftId); mkdirSync(draftDir, { recursive: true });
     const uploaded: Array<{ id: string; originalName: string; storagePath: string; durationMs: number }> = [];
@@ -252,13 +253,13 @@ export async function buildApp(options: AppOptions) {
     }
   });
 
-  app.get('/api/input-books', async (request, reply) => {
+  app.get('/api/input-books', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
     const session = requireSession(request, reply); if (!session) return reply;
     const books = scanInputBooks(inputDir).map(({ coverPath: _coverPath, files: _files, ...book }) => book);
     return { mounted: existsSync(inputDir), rootLabel: '/input', books };
   });
 
-  app.post('/api/drafts/from-input', async (request, reply) => {
+  app.post('/api/drafts/from-input', { config: { rateLimit: { max: 10, timeWindow: '5 minutes' } } }, async (request, reply) => {
     const session = requireSession(request, reply, true); if (!session) return reply;
     const input = inputDraftSchema.safeParse(request.body);
     if (!input.success) return reply.code(400).send({ code: 'VALIDATION_FAILED', message: 'Choose a valid input folder.', requestId: request.id });
@@ -277,7 +278,7 @@ export async function buildApp(options: AppOptions) {
     } catch (error) { return reply.code(400).send({ code: 'INPUT_BOOK_INVALID', message: error instanceof Error ? error.message : 'The input folder could not be analyzed.', requestId: request.id }); }
   });
 
-  app.post('/api/jobs', async (request, reply) => {
+  app.post('/api/jobs', { config: { rateLimit: { max: 20, timeWindow: '5 minutes' } } }, async (request, reply) => {
     const session = requireSession(request, reply, true); if (!session) return reply;
     const input = startSchema.safeParse(request.body);
     if (!input.success) return reply.code(400).send({ code: 'VALIDATION_FAILED', message: 'Review the audiobook metadata and every chapter title.', requestId: request.id, fieldErrors: input.error.flatten().fieldErrors });
@@ -310,7 +311,7 @@ export async function buildApp(options: AppOptions) {
     const timer = setInterval(send, 750); send(); request.raw.on('close', () => clearInterval(timer)); return reply;
   });
   app.post('/api/jobs/:id/cancel', async (request, reply) => { const session = requireSession(request, reply, true); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare("SELECT id, draft_id, status, output_path FROM jobs WHERE id = ? AND owner_id = ? AND status IN ('queued','running')").get(id, session.account_id) as { id: string; draft_id: string; status: string; output_path: string | null } | undefined; if (!row) return reply.code(409).send({ code: 'JOB_NOT_CANCELLABLE', message: 'This job cannot be cancelled.', requestId: request.id }); sqlite.prepare("UPDATE jobs SET status = 'cancelled', error_code = NULL, error_message = NULL, updated_at = ? WHERE id = ?").run(Date.now(), id); if (row.status === 'queued') { if (row.output_path) await discardOutputWorkingPath(row.output_path); await cleanupUploadedDraft(row.draft_id); } children.get(id)?.kill('SIGTERM'); workQueue.wake(); return reply.code(202).send({ id, status: 'cancelled' }); });
-  app.get('/api/jobs/:id/download', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare("SELECT * FROM jobs WHERE id = ? AND owner_id = ? AND status = 'completed' AND destination = 'download'").get(id, session.account_id) as JobRow | undefined; if (!row?.output_path || !existsSync(row.output_path)) return reply.code(404).send({ code: 'ARTIFACT_NOT_FOUND', message: 'The browser-download result is not available.', requestId: request.id }); reply.header('Content-Type', 'audio/mp4'); reply.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeDownloadName(row.title))}`); return reply.send(createReadStream(row.output_path)); });
+  app.get('/api/jobs/:id/download', { config: { rateLimit: { max: 30, timeWindow: '5 minutes' } } }, async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare("SELECT * FROM jobs WHERE id = ? AND owner_id = ? AND status = 'completed' AND destination = 'download'").get(id, session.account_id) as JobRow | undefined; if (!row?.output_path || !existsSync(row.output_path)) return reply.code(404).send({ code: 'ARTIFACT_NOT_FOUND', message: 'The browser-download result is not available.', requestId: request.id }); reply.header('Content-Type', 'audio/mp4'); reply.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeDownloadName(row.title))}`); return reply.send(createReadStream(row.output_path)); });
 
   const staticRoot = resolve(options.staticRoot ?? 'dist/client');
   if (existsSync(join(staticRoot, 'index.html'))) {

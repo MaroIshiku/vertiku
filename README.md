@@ -31,7 +31,7 @@ Requirements: Node.js 24, npm, FFmpeg, and ffprobe.
 
 ```bash
 npm ci
-VERTIKU_SETUP_SECRET='replace-with-at-least-16-random-characters' npm run dev
+ISHIKU_SETUP_SECRET='replace-with-at-least-32-random-characters' npm run dev
 ```
 
 In another terminal, run `npm run dev:client` and open `http://localhost:5173`. For a production-style local run, use `npm run build && npm start` and open `http://localhost:8080`.
@@ -39,12 +39,23 @@ In another terminal, run `npm run dev:client` and open `http://localhost:5173`. 
 ## Docker installation
 
 ```bash
-cp .env.example .env
-# Set VERTIKU_SETUP_SECRET in .env
-docker compose up --build
+# Edit ISHIKU_SETUP_SECRET in compose.yaml before the first start.
+docker compose up -d
 ```
 
-Open `http://localhost:8080`. Complete first-run setup with the configured secret, then remove the secret from the deployment environment after the administrator exists.
+The published Compose file pulls the ZimaOS appliance tag from GHCR. Set `VERTIKU_IMAGE` to a version tag or immutable digest when you need a pinned deployment. Open `http://localhost:8514`, complete first-run setup with the configured secret, then remove the secret from the deployment environment after the administrator exists.
+
+### ZimaOS
+
+In ZimaOS 1.7 or newer, choose **Install a customized app**, open the YAML import, and paste the complete [`compose.yaml`](compose.yaml). Before installing, replace `REPLACE-WITH-A-UNIQUE-SECRET-OF-AT-LEAST-32-CHARACTERS` with your own random value directly in the Compose editor. Vertiku deliberately rejects the published placeholder. No `.env` file and no source build are required. Port `8514` must be free.
+
+The ZimaOS-ready defaults use these host folders:
+
+- `/DATA/AppData/i_vertiku/Data` for the database and private application data
+- `/DATA/AppData/i_vertiku/Input` for read-only source folders
+- `/DATA/AppData/i_vertiku/Output` for converted M4B files
+
+Each folder directly below the input path is treated as a separate audiobook. The short-lived `vertiku-permissions` helper only assigns the data and output mount roots to the unprivileged application user; the Vertiku service itself still runs as the image's non-root `node` user.
 
 ## Volumes and folders
 
@@ -52,7 +63,7 @@ Open `http://localhost:8080`. Complete first-run setup with the configured secre
 
 ## Environment variables
 
-See [.env.example](.env.example). Important values are `VERTIKU_SETUP_SECRET`, `VERTIKU_DATA_DIR`, `VERTIKU_DATABASE_URL`, `VERTIKU_MAX_UPLOAD_GIB`, `VERTIKU_MAX_CONCURRENT_JOBS`, and `VERTIKU_COOKIE_SECURE`.
+See [.env.example](.env.example). Important values are `ISHIKU_SETUP_SECRET`, `VERTIKU_IMAGE`, `VERTIKU_DATA_DIR`, `VERTIKU_DATABASE_URL`, `VERTIKU_MAX_UPLOAD_GIB`, `VERTIKU_MAX_CONCURRENT_JOBS`, and `VERTIKU_COOKIE_SECURE`. Existing deployments may continue to use the legacy `VERTIKU_SETUP_SECRET` name.
 
 ## Workers and engines
 
@@ -76,7 +87,7 @@ Do not expose Vertiku directly to the internet. Put it behind HTTPS, keep the co
 
 ## Updates and backups
 
-Back up `/data` before every upgrade, keep the previous image digest, and test restoration. Detailed steps are in [docs/backup-restore.md](docs/backup-restore.md).
+Back up `/data` and `/output` before every upgrade, keep the previous image digest, and test restoration. Detailed steps are in [docs/backup-restore.md](docs/backup-restore.md).
 
 ## Part of the ishiku family
 
