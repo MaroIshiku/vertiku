@@ -38,6 +38,7 @@ services:
       VERTIKU_OUTPUT_DIR: /output
       VERTIKU_COOKIE_SECURE: "false"
       VERTIKU_PASSWORD_RESET: "false"
+      VERTIKU_ETA_HISTORY_RESET_TOKEN: ""
       VERTIKU_MAX_UPLOAD_GIB: "10"
     volumes:
       - type: bind
@@ -75,6 +76,9 @@ services:
         - container: VERTIKU_PASSWORD_RESET
           description:
             en_us: Set to true only for one password-recovery restart, then return it to false
+        - container: VERTIKU_ETA_HISTORY_RESET_TOKEN
+          description:
+            en_us: Change to a new value once after moving Vertiku to different hardware; the same value never resets twice
       ports:
         - container: "8080"
           description:
@@ -110,10 +114,10 @@ x-casaos:
   tips:
     before_install:
       en_us: Replace ISHIKU_SETUP_SECRET before first start. Input folders belong in /DATA/AppData/i_vertiku/Input and converted files are written to /DATA/AppData/i_vertiku/Output. Back up /DATA/AppData/i_vertiku/Data and Output before every update.
-  version: "0.4.0"
+  version: "0.4.1"
   update_at: "2026-08-10"
   release_notes:
-    en_us: Adds a persistent five-step conversion checklist, per-book runtime estimates, and an explicitly scoped full-queue completion forecast.
+    en_us: Makes full-queue ETA conservative and durable, adds one-use hardware recalibration, and improves Compose-secret recovery diagnostics.
   website: https://github.com/MaroIshiku/vertiku
   repo: https://github.com/MaroIshiku/vertiku
   support: https://github.com/MaroIshiku/vertiku/issues

@@ -14,6 +14,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { bookMetadataFromFolderName, chapterTitlesFromFilenames, naturalSort, safeDownloadName } from '../domain/audiobook.js';
 import { openDatabase } from './database.js';
+import { buildForecastModel, estimateJobRemainingMs, type ForecastSample } from './forecast.js';
 import { convertToM4b, inspectAudio, probeAudio, type AudioInspection, type EmbeddedMetadata } from './ffmpeg.js';
 import { filesForInputBook, scanInputBooks } from './input-library.js';
 import { createOutputWorkingPath, discardOutputWorkingPath, publishOutputWorkingPath } from './output-library.js';
@@ -58,7 +59,6 @@ type DraftSource = { id: string; draft_id: string; original_name: string; storag
 type StoredChapter = { sourceId: string; title: string };
 type StoredMetadata = { title: string; author: string; narrator: string; year: string; genre: string; description: string };
 type JobPhase = 'queued' | 'reading_sources' | 'preparing_output' | 'encoding_audio' | 'validating_output' | 'completed';
-type ForecastModel = { ratio: number; confidence: 'learning' | 'measured' };
 type JobRow = { id: string; draft_id: string; owner_id: number; status: string; phase: JobPhase; progress: number; title: string; destination: 'output' | 'download'; bitrate_kbps: 64 | 96 | 128; metadata_json: string; chapters_json: string; output_path: string | null; export_path: string | null; error_code: string | null; error_message: string | null; source_fingerprint: string | null; source_bytes: number; source_duration_ms: number; estimated_duration_ms: number; estimated_output_bytes: number; retry_of: string | null; retryable: number; started_at: number | null; finished_at: number | null; created_at: number; updated_at: number };
 
 export type AppOptions = {
@@ -73,6 +73,7 @@ export type AppOptions = {
   maxUploadBytes?: number;
   maxConcurrentJobs?: number;
   passwordResetEnabled?: boolean;
+  etaHistoryResetToken?: string;
   convert?: typeof convertToM4b;
   probe?: typeof probeAudio;
   inspect?: typeof inspectAudio;
@@ -107,6 +108,20 @@ export async function buildApp(options: AppOptions) {
   mkdirSync(resultsDir, { recursive: true });
   const app = Fastify({ logger: { redact: ['req.headers.cookie', 'req.headers.authorization', 'body.password', 'body.newPassword', 'body.setupSecret'] }, trustProxy: false, bodyLimit: 10 * 1024 * 1024 });
   const { sqlite } = openDatabase(options.databasePath);
+  if (options.etaHistoryResetToken) {
+    const resetTokenHash = hashToken(options.etaHistoryResetToken);
+    const previous = sqlite.prepare("SELECT value FROM system_settings WHERE key = 'eta_history_reset_token_hash'").get() as { value: string } | undefined;
+    if (previous?.value !== resetTokenHash) {
+      const resetAt = Date.now();
+      sqlite.exec('BEGIN IMMEDIATE');
+      try {
+        sqlite.prepare('DELETE FROM conversion_samples').run();
+        sqlite.prepare("INSERT INTO system_settings (key, value) VALUES ('eta_history_reset_token_hash', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(resetTokenHash);
+        sqlite.prepare("INSERT INTO system_settings (key, value) VALUES ('eta_history_reset_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(resetAt));
+        sqlite.exec('COMMIT');
+      } catch (error) { sqlite.exec('ROLLBACK'); throw error; }
+    }
+  }
   const cookieName = options.cookieSecure ? '__Host-vertiku_session' : 'vertiku_session';
   const children = new Map<string, ChildProcessWithoutNullStreams>();
   let shuttingDown = false;
@@ -158,38 +173,32 @@ export async function buildApp(options: AppOptions) {
     return session;
   }
 
-  function learnedConversionRatio(ownerId: number) {
-    const rows = sqlite.prepare("SELECT source_duration_ms, started_at, finished_at FROM jobs WHERE owner_id = ? AND status = 'completed' AND source_duration_ms > 0 AND started_at IS NOT NULL AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 10").all(ownerId) as Array<{ source_duration_ms: number; started_at: number; finished_at: number }>;
-    if (!rows.length) return { ratio: 0.25, confidence: 'learning' as const };
-    const audio = rows.reduce((sum, row) => sum + row.source_duration_ms, 0);
-    const processing = rows.reduce((sum, row) => sum + Math.max(1, row.finished_at - row.started_at), 0);
-    return { ratio: Math.min(4, Math.max(0.01, processing / audio)), confidence: rows.length >= 3 ? 'measured' as const : 'learning' as const };
+  function forecastModel(ownerId: number, running?: JobRow, now = Date.now()) {
+    const samples = sqlite.prepare('SELECT source_bytes, source_duration_ms, processing_ms FROM conversion_samples WHERE owner_id = ? ORDER BY created_at DESC LIMIT 50').all(ownerId) as ForecastSample[];
+    return buildForecastModel(samples, running, now);
   }
 
-  function estimatedRemainingMs(row: JobRow, learned: ForecastModel, now = Date.now()) {
-    const duration = row.source_duration_ms || row.estimated_duration_ms;
-    if (!['queued', 'running'].includes(row.status)) return 0;
-    if (row.status === 'running' && row.progress >= 10 && row.started_at) {
-      const elapsed = Math.max(1, now - row.started_at);
-      return Math.max(1_000, elapsed * (100 - Math.min(99, row.progress)) / Math.max(1, row.progress));
-    }
-    return Math.max(1_000, duration * learned.ratio);
+  function estimatedRemainingMs(row: JobRow, model: ReturnType<typeof buildForecastModel>, now = Date.now()) {
+    return estimateJobRemainingMs(row, model, now);
   }
 
-  function publicJob(row: JobRow, learned: ForecastModel = learnedConversionRatio(row.owner_id)) {
+  function publicJob(row: JobRow, model = forecastModel(row.owner_id, row.status === 'running' ? row : undefined)) {
     const position = row.status === 'queued' ? Number((sqlite.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status = 'queued' AND (created_at < ? OR (created_at = ? AND id <= ?))").get(row.created_at, row.created_at, row.id) as { count: number }).count) : undefined;
     const phase = row.status === 'completed' ? 'completed' : row.phase;
-    const remainingMs = row.status === 'running' ? estimatedRemainingMs(row, learned) : 0;
-    return { id: row.id, status: row.status, phase, progress: row.progress, queuePosition: position, title: row.title, destination: row.destination, outputName: row.export_path ? basename(row.export_path) : undefined, error: row.error_message ? { code: row.error_code, message: row.error_message, retryable: Boolean(row.retryable) } : undefined, downloadReady: row.status === 'completed' && row.destination === 'download', mediaReady: row.status === 'completed' && Boolean(row.output_path && existsSync(row.output_path)), retryable: row.status === 'failed' && Boolean(row.retryable), retryOf: row.retry_of ?? undefined, sourceDurationMs: row.source_duration_ms || row.estimated_duration_ms, estimatedOutputBytes: row.estimated_output_bytes, estimatedRemainingSeconds: remainingMs ? Math.max(1, Math.round(remainingMs / 1000)) : undefined, estimatedFinishAt: remainingMs ? new Date(Date.now() + remainingMs).toISOString() : undefined, estimateConfidence: learned.confidence, createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString() };
+    const remainingMs = row.status === 'running' ? estimatedRemainingMs(row, model) : 0;
+    return { id: row.id, status: row.status, phase, progress: row.progress, queuePosition: position, title: row.title, destination: row.destination, outputName: row.export_path ? basename(row.export_path) : undefined, error: row.error_message ? { code: row.error_code, message: row.error_message, retryable: Boolean(row.retryable) } : undefined, downloadReady: row.status === 'completed' && row.destination === 'download', mediaReady: row.status === 'completed' && Boolean(row.output_path && existsSync(row.output_path)), retryable: row.status === 'failed' && Boolean(row.retryable), retryOf: row.retry_of ?? undefined, sourceDurationMs: row.source_duration_ms || row.estimated_duration_ms, estimatedOutputBytes: row.estimated_output_bytes, estimatedRemainingSeconds: remainingMs ? Math.max(1, Math.round(remainingMs / 1000)) : undefined, estimatedFinishAt: remainingMs ? new Date(Date.now() + remainingMs).toISOString() : undefined, estimateConfidence: model.confidence, createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString() };
   }
 
-  function queueSummary(ownerId: number, learned = learnedConversionRatio(ownerId)) {
+  function queueSummary(ownerId: number) {
     const rows = sqlite.prepare("SELECT * FROM jobs WHERE owner_id = ? AND status IN ('running','queued') ORDER BY created_at, id").all(ownerId) as JobRow[];
     const now = Date.now();
-    const remainingMs = rows.reduce((sum, row) => sum + estimatedRemainingMs(row, learned, now), 0);
     const running = rows.find((row) => row.status === 'running');
-    const currentRemainingMs = running ? estimatedRemainingMs(running, learned, now) : 0;
-    return { remainingJobs: rows.length, queuedJobs: rows.filter((row) => row.status === 'queued').length, estimatedRemainingSeconds: Math.max(0, Math.round(remainingMs / 1000)), estimatedFinishAt: rows.length ? new Date(now + remainingMs).toISOString() : undefined, currentJobId: running?.id, currentJobEstimatedRemainingSeconds: running ? Math.max(1, Math.round(currentRemainingMs / 1000)) : undefined, currentJobEstimatedFinishAt: running ? new Date(now + currentRemainingMs).toISOString() : undefined, confidence: learned.confidence };
+    const model = forecastModel(ownerId, running, now);
+    const currentRemainingMs = running ? estimatedRemainingMs(running, model, now) : 0;
+    const queued = rows.filter((row) => row.status === 'queued');
+    const queuedRemainingMs = queued.reduce((sum, row) => sum + estimatedRemainingMs(row, model, now), 0);
+    const remainingMs = currentRemainingMs + queuedRemainingMs;
+    return { remainingJobs: rows.length, queuedJobs: queued.length, queuedSourceBytes: queued.reduce((sum, row) => sum + row.source_bytes, 0), estimatedQueuedSeconds: Math.max(0, Math.round(queuedRemainingMs / 1000)), estimatedRemainingSeconds: Math.max(0, Math.round(remainingMs / 1000)), estimatedFinishAt: rows.length ? new Date(now + remainingMs).toISOString() : undefined, currentJobId: running?.id, currentJobEstimatedRemainingSeconds: running ? Math.max(1, Math.round(currentRemainingMs / 1000)) : undefined, currentJobEstimatedFinishAt: running ? new Date(now + currentRemainingMs).toISOString() : undefined, confidence: model.confidence, forecastBasis: model.basis, forecastSampleCount: model.sampleCount };
   }
 
   async function cleanupUploadedDraft(draftId: string) {
@@ -276,7 +285,12 @@ export async function buildApp(options: AppOptions) {
       }
       const exportPath = job.destination === 'output' ? await publishOutputWorkingPath(workingPath, outputDir, safeDownloadName(job.title)) : null;
       const storedPath = exportPath ?? workingPath;
-      sqlite.prepare("UPDATE jobs SET status = 'completed', phase = 'completed', progress = 100, output_path = ?, export_path = ?, retryable = 0, finished_at = ?, updated_at = ? WHERE id = ?").run(storedPath, exportPath, Date.now(), Date.now(), job.id);
+      const finishedAt = Date.now();
+      sqlite.prepare("UPDATE jobs SET status = 'completed', phase = 'completed', progress = 100, output_path = ?, export_path = ?, retryable = 0, finished_at = ?, updated_at = ? WHERE id = ?").run(storedPath, exportPath, finishedAt, finishedAt, job.id);
+      const completed = sqlite.prepare('SELECT owner_id, source_bytes, source_duration_ms, started_at FROM jobs WHERE id = ?').get(job.id) as Pick<JobRow, 'owner_id' | 'source_bytes' | 'source_duration_ms' | 'started_at'>;
+      if (completed.source_bytes > 0 && completed.source_duration_ms > 0 && completed.started_at) {
+        sqlite.prepare('INSERT OR REPLACE INTO conversion_samples (id, owner_id, source_bytes, source_duration_ms, processing_ms, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(job.id, completed.owner_id, completed.source_bytes, completed.source_duration_ms, Math.max(1, finishedAt - completed.started_at), finishedAt);
+      }
       sqlite.prepare("UPDATE jobs SET retryable = 0 WHERE draft_id = ? AND status = 'failed'").run(job.draft_id);
       await cleanupUploadedDraft(job.draft_id);
     } catch (error) {
@@ -321,7 +335,7 @@ export async function buildApp(options: AppOptions) {
   app.get('/health/ready', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (_request, reply) => {
     try { sqlite.prepare('SELECT 1').get(); return { status: 'ready', database: 'ok', storage: 'ok', input: existsSync(inputDir) ? 'mounted' : 'not-mounted', output: existsSync(outputDir) ? 'mounted' : 'not-mounted' }; } catch { return reply.code(503).send({ status: 'not-ready' }); }
   });
-  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.4.0', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
+  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.4.1', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
   app.get('/api/setup/status', async () => ({ required: Number((sqlite.prepare('SELECT COUNT(*) AS count FROM accounts').get() as { count: number }).count) === 0, passwordResetEnabled: passwordResetAvailable }));
 
   app.post('/api/setup', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
@@ -350,8 +364,10 @@ export async function buildApp(options: AppOptions) {
   app.post('/api/password-reset', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
     const input = passwordResetSchema.safeParse(request.body);
     const account = input.success ? sqlite.prepare('SELECT id FROM accounts WHERE username = ? COLLATE NOCASE').get(input.data.username) as { id: number } | undefined : undefined;
-    const authorized = passwordResetAvailable && input.success && options.setupSecret && account && secretMatches(input.data.setupSecret, options.setupSecret) && input.data.newPassword !== input.data.setupSecret;
+    const authorized = passwordResetAvailable && input.success && options.setupSecret && account && secretMatches(input.data.setupSecret.trim(), options.setupSecret.trim()) && input.data.newPassword !== input.data.setupSecret;
     if (!authorized || !input.success || !account) {
+      const reason = !passwordResetAvailable ? 'disabled' : !input.success ? 'invalid_payload' : !options.setupSecret ? 'missing_configured_secret' : !account ? 'unknown_account' : input.data.newPassword === input.data.setupSecret ? 'new_password_matches_secret' : 'secret_mismatch';
+      request.log.warn({ reason }, 'Password recovery denied');
       audit('password_reset', account?.id ?? null, 'failure', request.id);
       return reply.code(403).send({ code: 'PASSWORD_RESET_DENIED', message: 'Password recovery could not be authorized.', requestId: request.id });
     }
@@ -532,12 +548,12 @@ export async function buildApp(options: AppOptions) {
     return sqlite.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as JobRow;
   }
 
-  app.get('/api/jobs', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const learned = learnedConversionRatio(session.account_id); return { jobs: rows.map((row) => publicJob(row, learned)), queue: queueSummary(session.account_id, learned) }; });
+  app.get('/api/jobs', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const running = rows.find((row) => row.status === 'running'); const model = forecastModel(session.account_id, running); return { jobs: rows.map((row) => publicJob(row, model)), queue: queueSummary(session.account_id) }; });
   app.get('/api/jobs/events', async (request, reply) => {
     const session = requireSession(request, reply); if (!session) return reply;
     reply.hijack(); reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
     let previous = '';
-    const send = () => { if (!sessionIsActive(session)) { clearInterval(timer); reply.raw.end(); return; } const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const learned = learnedConversionRatio(session.account_id); const data = JSON.stringify({ jobs: rows.map((row) => publicJob(row, learned)), queue: queueSummary(session.account_id, learned) }); if (data !== previous) { previous = data; reply.raw.write(`event: jobs\ndata: ${data}\n\n`); } };
+    const send = () => { if (!sessionIsActive(session)) { clearInterval(timer); reply.raw.end(); return; } const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const running = rows.find((row) => row.status === 'running'); const model = forecastModel(session.account_id, running); const data = JSON.stringify({ jobs: rows.map((row) => publicJob(row, model)), queue: queueSummary(session.account_id) }); if (data !== previous) { previous = data; reply.raw.write(`event: jobs\ndata: ${data}\n\n`); } };
     const timer = setInterval(send, 750); send(); request.raw.on('close', () => clearInterval(timer)); return reply;
   });
   app.get('/api/jobs/:id', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ?').get(id, session.account_id) as JobRow | undefined; return row ? publicJob(row) : reply.code(404).send({ code: 'JOB_NOT_FOUND', message: 'The job was not found.', requestId: request.id }); });

@@ -7,6 +7,13 @@ describe('runtime configuration', () => {
     expect(loadConfig({ ISHIKU_SETUP_SECRET: secret }).setupSecret).toBe(secret);
   });
 
+  it('normalizes accidental surrounding whitespace and accepts an ETA history reset token', () => {
+    const secret = 'synthetic-ishiku-setup-secret-value-1234';
+    const config = loadConfig({ ISHIKU_SETUP_SECRET: `  ${secret}  `, VERTIKU_ETA_HISTORY_RESET_TOKEN: 'new-hardware-2026' });
+    expect(config.setupSecret).toBe(secret);
+    expect(config.etaHistoryResetToken).toBe('new-hardware-2026');
+  });
+
   it('retains the legacy Vertiku variable for existing deployments', () => {
     const secret = 'synthetic-vertiku-setup-secret-value-123';
     expect(loadConfig({ VERTIKU_SETUP_SECRET: secret }).setupSecret).toBe(secret);

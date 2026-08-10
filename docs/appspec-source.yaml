@@ -1148,6 +1148,9 @@ appspec:
         confidence_label_required: true
         running_job_scope: "shown_in_job_details"
         complete_queue_scope: "running_job_plus_every_queued_job"
+        durable_performance_samples: true
+        samples_independent_of_source_files: true
+        reset_token_environment_variable: "VERTIKU_ETA_HISTORY_RESET_TOKEN"
     recipes_page:
       presentation:
         mobile: "rounded_recipe_cards"
@@ -1346,6 +1349,9 @@ appspec:
         VERTIKU_PASSWORD_RESET:
           default: false
           description: "Explicit one-use recovery mode; return to false after success."
+        VERTIKU_ETA_HISTORY_RESET_TOKEN:
+          default: ""
+          description: "Changing this non-secret token clears durable ETA performance samples exactly once."
         VERTIKU_DEFAULT_RETENTION_HOURS:
           default: 24
         VERTIKU_LOG_LEVEL:
