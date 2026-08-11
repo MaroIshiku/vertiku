@@ -59,7 +59,7 @@ type DraftSource = { id: string; draft_id: string; original_name: string; storag
 type StoredChapter = { sourceId: string; title: string };
 type StoredMetadata = { title: string; author: string; narrator: string; year: string; genre: string; description: string };
 type JobPhase = 'queued' | 'reading_sources' | 'preparing_output' | 'encoding_audio' | 'validating_output' | 'completed';
-type JobRow = { id: string; draft_id: string; owner_id: number; status: string; phase: JobPhase; progress: number; title: string; destination: 'output' | 'download'; bitrate_kbps: 64 | 96 | 128; metadata_json: string; chapters_json: string; output_path: string | null; export_path: string | null; error_code: string | null; error_message: string | null; source_fingerprint: string | null; source_bytes: number; source_duration_ms: number; estimated_duration_ms: number; estimated_output_bytes: number; retry_of: string | null; retryable: number; started_at: number | null; finished_at: number | null; created_at: number; updated_at: number };
+type JobRow = { id: string; draft_id: string; owner_id: number; status: string; phase: JobPhase; progress: number; title: string; destination: 'output' | 'download'; bitrate_kbps: 64 | 96 | 128; metadata_json: string; chapters_json: string; output_path: string | null; export_path: string | null; error_code: string | null; error_message: string | null; source_fingerprint: string | null; source_bytes: number; source_duration_ms: number; estimated_duration_ms: number; estimated_output_bytes: number; retry_of: string | null; retryable: number; started_at: number | null; finished_at: number | null; archived_at: number | null; created_at: number; updated_at: number };
 
 export type AppOptions = {
   databasePath: string;
@@ -320,7 +320,19 @@ export async function buildApp(options: AppOptions) {
       const cancelled = (sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(job.id) as { status: string } | undefined)?.status === 'cancelled';
       if (workingPath) await discardOutputWorkingPath(workingPath);
       if (!cancelled) {
-        const failure = error instanceof JobFailure ? error : new JobFailure(error instanceof Error && /validation/i.test(error.message) ? 'VALIDATION_FAILED' : 'ENGINE_FAILED', error instanceof Error ? error.message.slice(0, 1000) : 'Conversion failed.', true);
+        const diagnostic = error instanceof Error ? error : new Error(String(error));
+        const jobRef = job.id.slice(0, 8);
+        const failedState = sqlite.prepare('SELECT phase, progress FROM jobs WHERE id = ?').get(job.id) as { phase: JobPhase; progress: number } | undefined;
+        const failure = error instanceof JobFailure
+          ? error
+          : new JobFailure(
+            /validation/i.test(diagnostic.message) ? 'VALIDATION_FAILED' : 'ENGINE_FAILED',
+            /validation/i.test(diagnostic.message)
+              ? `The converted file did not pass validation. Check the Vertiku container logs for reference ${jobRef}.`
+              : `FFmpeg could not convert this audiobook. Check the Vertiku container logs for reference ${jobRef}.`,
+            true
+          );
+        app.log.error({ err: diagnostic, jobId: job.id, jobRef, jobPhase: failedState?.phase ?? job.phase, jobProgress: failedState?.progress ?? job.progress, sourceCount: rows.length, failureCode: failure.code }, 'Conversion job failed');
         sqlite.prepare("UPDATE jobs SET status = 'failed', error_code = ?, error_message = ?, retryable = ?, finished_at = ?, updated_at = ? WHERE id = ?").run(failure.code, failure.message, failure.retryable ? 1 : 0, Date.now(), Date.now(), job.id);
       }
     } finally {
@@ -354,7 +366,7 @@ export async function buildApp(options: AppOptions) {
   app.get('/health/ready', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (_request, reply) => {
     try { sqlite.prepare('SELECT 1').get(); return { status: 'ready', database: 'ok', storage: 'ok', input: existsSync(inputDir) ? 'mounted' : 'not-mounted', output: existsSync(outputDir) ? 'mounted' : 'not-mounted' }; } catch { return reply.code(503).send({ status: 'not-ready' }); }
   });
-  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.4.3', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
+  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.5.0', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
   app.get('/api/setup/status', async () => ({ required: Number((sqlite.prepare('SELECT COUNT(*) AS count FROM accounts').get() as { count: number }).count) === 0, passwordResetEnabled: passwordResetAvailable }));
 
   app.post('/api/setup', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
@@ -569,15 +581,15 @@ export async function buildApp(options: AppOptions) {
     return sqlite.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as JobRow;
   }
 
-  app.get('/api/jobs', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const running = rows.find((row) => row.status === 'running'); const model = forecastModel(session.account_id, running); return { jobs: rows.map((row) => publicJob(row, model)), queue: queueSummary(session.account_id) }; });
+  app.get('/api/jobs', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const running = rows.find((row) => row.status === 'running'); const model = forecastModel(session.account_id, running); return { jobs: rows.map((row) => publicJob(row, model)), queue: queueSummary(session.account_id) }; });
   app.get('/api/jobs/events', async (request, reply) => {
     const session = requireSession(request, reply); if (!session) return reply;
     reply.hijack(); reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
     let previous = '';
-    const send = () => { if (!sessionIsActive(session)) { clearInterval(timer); reply.raw.end(); return; } const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const running = rows.find((row) => row.status === 'running'); const model = forecastModel(session.account_id, running); const data = JSON.stringify({ jobs: rows.map((row) => publicJob(row, model)), queue: queueSummary(session.account_id) }); if (data !== previous) { previous = data; reply.raw.write(`event: jobs\ndata: ${data}\n\n`); } };
+    const send = () => { if (!sessionIsActive(session)) { clearInterval(timer); reply.raw.end(); return; } const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const running = rows.find((row) => row.status === 'running'); const model = forecastModel(session.account_id, running); const data = JSON.stringify({ jobs: rows.map((row) => publicJob(row, model)), queue: queueSummary(session.account_id) }); if (data !== previous) { previous = data; reply.raw.write(`event: jobs\ndata: ${data}\n\n`); } };
     const timer = setInterval(send, 750); send(); request.raw.on('close', () => clearInterval(timer)); return reply;
   });
-  app.get('/api/jobs/:id', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ?').get(id, session.account_id) as JobRow | undefined; return row ? publicJob(row) : reply.code(404).send({ code: 'JOB_NOT_FOUND', message: 'The job was not found.', requestId: request.id }); });
+  app.get('/api/jobs/:id', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ? AND archived_at IS NULL').get(id, session.account_id) as JobRow | undefined; return row ? publicJob(row) : reply.code(404).send({ code: 'JOB_NOT_FOUND', message: 'The job was not found.', requestId: request.id }); });
   app.get('/api/jobs/:id/events', async (request, reply) => {
     const session = requireSession(request, reply); if (!session) return reply;
     const { id } = request.params as { id: string }; const exists = sqlite.prepare('SELECT id FROM jobs WHERE id = ? AND owner_id = ?').get(id, session.account_id); if (!exists) return reply.code(404).send({ code: 'JOB_NOT_FOUND', message: 'The job was not found.', requestId: request.id });
@@ -601,17 +613,30 @@ export async function buildApp(options: AppOptions) {
     workQueue.wake();
     return reply.code(202).send({ cancelled: queued.length });
   });
+  app.post('/api/jobs/clear-stopped', async (request, reply) => {
+    const session = requireSession(request, reply, true); if (!session) return reply;
+    const now = Date.now();
+    const result = sqlite.prepare("UPDATE jobs SET archived_at = ?, updated_at = ? WHERE owner_id = ? AND archived_at IS NULL AND status IN ('failed','cancelled')").run(now, now, session.account_id);
+    return reply.send({ cleared: Number(result.changes) });
+  });
+  app.post('/api/jobs/:id/clear', async (request, reply) => {
+    const session = requireSession(request, reply, true); if (!session) return reply;
+    const { id } = request.params as { id: string }; const now = Date.now();
+    const result = sqlite.prepare("UPDATE jobs SET archived_at = ?, updated_at = ? WHERE id = ? AND owner_id = ? AND archived_at IS NULL AND status IN ('completed','failed','cancelled')").run(now, now, id, session.account_id);
+    if (Number(result.changes) === 0) return reply.code(409).send({ code: 'JOB_NOT_CLEARABLE', message: 'Only completed, failed, or cancelled jobs can be cleared.', requestId: request.id });
+    return reply.send({ cleared: 1 });
+  });
   app.post('/api/jobs/:id/cancel', async (request, reply) => { const session = requireSession(request, reply, true); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare("SELECT id, draft_id, status, output_path FROM jobs WHERE id = ? AND owner_id = ? AND status IN ('queued','running')").get(id, session.account_id) as { id: string; draft_id: string; status: string; output_path: string | null } | undefined; if (!row) return reply.code(409).send({ code: 'JOB_NOT_CANCELLABLE', message: 'This job cannot be cancelled.', requestId: request.id }); sqlite.prepare("UPDATE jobs SET status = 'cancelled', error_code = NULL, error_message = NULL, updated_at = ? WHERE id = ?").run(Date.now(), id); if (row.status === 'queued') { if (row.output_path) await discardOutputWorkingPath(row.output_path); await cleanupUploadedDraft(row.draft_id); } children.get(id)?.kill('SIGTERM'); workQueue.wake(); return reply.code(202).send({ id, status: 'cancelled' }); });
   app.post('/api/jobs/:id/retry', async (request, reply) => {
     const session = requireSession(request, reply, true); if (!session) return reply;
-    const { id } = request.params as { id: string }; const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ?').get(id, session.account_id) as JobRow | undefined;
+    const { id } = request.params as { id: string }; const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ? AND archived_at IS NULL').get(id, session.account_id) as JobRow | undefined;
     if (!row) return reply.code(404).send({ code: 'JOB_NOT_FOUND', message: 'The job was not found.', requestId: request.id });
     try { const retried = await retryFailedJob(row, session.account_id); workQueue.wake(); return reply.code(202).send(publicJob(retried)); }
     catch (error) { const failure = error instanceof JobFailure ? error : new JobFailure('RETRY_FAILED', 'The failed job could not be retried.', false); return reply.code(409).send({ code: failure.code, message: failure.message, requestId: request.id }); }
   });
   app.post('/api/jobs/retry-failed', async (request, reply) => {
     const session = requireSession(request, reply, true); if (!session) return reply;
-    const failed = sqlite.prepare("SELECT * FROM jobs WHERE owner_id = ? AND status = 'failed' AND retryable = 1 ORDER BY created_at LIMIT 100").all(session.account_id) as JobRow[];
+    const failed = sqlite.prepare("SELECT * FROM jobs WHERE owner_id = ? AND archived_at IS NULL AND status = 'failed' AND retryable = 1 ORDER BY created_at LIMIT 100").all(session.account_id) as JobRow[];
     const retried: JobRow[] = []; let skipped = 0;
     for (const row of failed) { try { retried.push(await retryFailedJob(row, session.account_id)); } catch { skipped += 1; } }
     workQueue.wake(); return reply.code(202).send({ accepted: retried.length, skipped, jobs: retried.map((row) => publicJob(row)) });
