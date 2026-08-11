@@ -18,8 +18,10 @@ describe('audiobook chapter model', () => {
 
   it('derives readable titles and escapes FFmetadata control characters', () => {
     expect(chapterTitleFromFilename('003_the-last.chapter.mp3')).toBe('the last chapter');
-    const metadata = buildFfmetadata({ title: 'Book=One;#' }, [{ title: 'Part=1', durationMs: 1250 }, { title: 'Part 2', durationMs: 2500 }]);
+    const metadata = buildFfmetadata({ title: 'Book=One;#', description: 'A long description without a duplicate comment tag.' }, [{ title: 'Part=1', durationMs: 1250 }, { title: 'Part 2', durationMs: 2500 }]);
     expect(metadata).toContain('title=Book\\=One\\;\\#');
+    expect(metadata).toContain('description=A long description without a duplicate comment tag.');
+    expect(metadata).not.toContain('\ncomment=');
     expect(metadata).toContain('START=1250\nEND=3750');
   });
 
@@ -46,11 +48,15 @@ describe.runIf(spawnSync('ffmpeg', ['-version'], { windowsHide: true }).status =
     expect((await inspectAudio('ffprobe', sources[0]!)).metadata).toMatchObject({ title: 'Embedded book', author: 'Embedded author', genre: 'Audiobook' });
     const outputPath = join(directory, 'result.m4b');
     const phases: string[] = [];
-    await convertToM4b({ ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe', outputPath, bitrateKbps: 64, metadata: { title: 'Synthetic book', author: 'Vertiku Tests' }, sources: sources.map((path, index) => ({ path, title: `Part ${index + 1}`, durationMs: durations[index]! })), onPhase: (phase) => phases.push(phase) });
+    await convertToM4b({ ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe', outputPath, bitrateKbps: 64, metadata: { title: 'Synthetic book', author: 'Vertiku Tests', description: 'Synthetic description' }, sources: sources.map((path, index) => ({ path, title: `Part ${index + 1}`, durationMs: durations[index]! })), onPhase: (phase) => phases.push(phase) });
     expect(phases).toEqual(['encoding_audio', 'validating_output']);
     expect(readFileSync(outputPath).byteLength).toBeGreaterThan(1000);
-    const probed = spawnSync('ffprobe', ['-v', 'error', '-show_chapters', '-of', 'json', outputPath], { encoding: 'utf8', windowsHide: true });
-    expect(probed.status).toBe(0); expect((JSON.parse(probed.stdout) as { chapters: unknown[] }).chapters).toHaveLength(2);
+    const probed = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format_tags', '-show_chapters', '-of', 'json', outputPath], { encoding: 'utf8', windowsHide: true });
+    expect(probed.status).toBe(0);
+    const result = JSON.parse(probed.stdout) as { chapters: unknown[]; format?: { tags?: Record<string, string> } };
+    expect(result.chapters).toHaveLength(2);
+    expect(Object.fromEntries(Object.entries(result.format?.tags ?? {}).map(([key, value]) => [key.toLowerCase(), value]))).toMatchObject({ description: 'Synthetic description' });
+    expect(Object.keys(result.format?.tags ?? {}).map((key) => key.toLowerCase())).not.toContain('comment');
     expect(existsSync(join(directory, '.result.m4b.ffmetadata'))).toBe(false);
   }, 30_000);
 });

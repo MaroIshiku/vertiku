@@ -85,6 +85,18 @@ const secretMatches = (actual: string, expected: string) => {
   const left = Buffer.from(actual); const right = Buffer.from(expected);
   return left.length === right.length && timingSafeEqual(left, right);
 };
+const normalizedIdentifier = (value: string) => value.trim().normalize('NFKC').toLocaleLowerCase('en-US');
+const copiedSecretCandidates = (value: string) => {
+  const trimmed = value.trim();
+  const candidates = new Set([trimmed, trimmed.normalize('NFKC')]);
+  const first = trimmed.at(0); const last = trimmed.at(-1);
+  if (trimmed.length >= 2 && ((first === '"' && last === '"') || (first === "'" && last === "'"))) {
+    const unquoted = trimmed.slice(1, -1);
+    candidates.add(unquoted); candidates.add(unquoted.normalize('NFKC'));
+  }
+  return [...candidates];
+};
+const copiedSecretMatches = (actual: string, expected: string) => copiedSecretCandidates(actual).some((candidate) => copiedSecretCandidates(expected).some((configured) => secretMatches(candidate, configured)));
 const formatDuration = (milliseconds: number) => {
   const total = Math.round(milliseconds / 1000);
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
@@ -108,6 +120,13 @@ export async function buildApp(options: AppOptions) {
   mkdirSync(resultsDir, { recursive: true });
   const app = Fastify({ logger: { redact: ['req.headers.cookie', 'req.headers.authorization', 'body.password', 'body.newPassword', 'body.setupSecret'] }, trustProxy: false, bodyLimit: 10 * 1024 * 1024 });
   const { sqlite } = openDatabase(options.databasePath);
+  type AccountRecord = { id: number; username: string; password_hash: string; role: string };
+  const accountByUsername = (username: string) => {
+    const direct = sqlite.prepare('SELECT id, username, password_hash, role FROM accounts WHERE username = ? COLLATE NOCASE').get(username.trim()) as AccountRecord | undefined;
+    if (direct) return direct;
+    const normalized = normalizedIdentifier(username);
+    return (sqlite.prepare('SELECT id, username, password_hash, role FROM accounts').all() as unknown as AccountRecord[]).find((account) => normalizedIdentifier(account.username) === normalized);
+  };
   if (options.etaHistoryResetToken) {
     const resetTokenHash = hashToken(options.etaHistoryResetToken);
     const previous = sqlite.prepare("SELECT value FROM system_settings WHERE key = 'eta_history_reset_token_hash'").get() as { value: string } | undefined;
@@ -335,7 +354,7 @@ export async function buildApp(options: AppOptions) {
   app.get('/health/ready', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (_request, reply) => {
     try { sqlite.prepare('SELECT 1').get(); return { status: 'ready', database: 'ok', storage: 'ok', input: existsSync(inputDir) ? 'mounted' : 'not-mounted', output: existsSync(outputDir) ? 'mounted' : 'not-mounted' }; } catch { return reply.code(503).send({ status: 'not-ready' }); }
   });
-  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.4.2', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
+  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.4.3', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
   app.get('/api/setup/status', async () => ({ required: Number((sqlite.prepare('SELECT COUNT(*) AS count FROM accounts').get() as { count: number }).count) === 0, passwordResetEnabled: passwordResetAvailable }));
 
   app.post('/api/setup', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
@@ -343,7 +362,7 @@ export async function buildApp(options: AppOptions) {
     const input = setupSchema.safeParse(request.body);
     if (!input.success) return reply.code(400).send({ code: 'VALIDATION_FAILED', message: 'Enter a username, a password of at least 12 characters, and the setup secret.', requestId: request.id });
     if (!options.setupSecret) return reply.code(503).send({ code: 'SETUP_SECRET_MISSING', message: 'The server administrator must configure ISHIKU_SETUP_SECRET.', requestId: request.id });
-    if (!secretMatches(input.data.setupSecret, options.setupSecret) || input.data.password === input.data.setupSecret) return reply.code(403).send({ code: 'SETUP_DENIED', message: 'Setup could not be authorized.', requestId: request.id });
+    if (!copiedSecretMatches(input.data.setupSecret, options.setupSecret) || copiedSecretMatches(input.data.password, options.setupSecret)) return reply.code(403).send({ code: 'SETUP_DENIED', message: 'Setup could not be authorized.', requestId: request.id });
     const passwordHash = await argon2.hash(input.data.password, { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 });
     sqlite.prepare("INSERT INTO accounts (username, password_hash, role) VALUES (?, ?, 'admin')").run(input.data.username, passwordHash);
     return reply.code(201).send({ created: true });
@@ -351,7 +370,7 @@ export async function buildApp(options: AppOptions) {
 
   app.post('/api/session', { config: { rateLimit: { max: 8, timeWindow: '5 minutes' } } }, async (request, reply) => {
     const input = loginSchema.safeParse(request.body);
-    const account = input.success ? sqlite.prepare('SELECT id, username, password_hash, role FROM accounts WHERE username = ? COLLATE NOCASE').get(input.data.username) as { id: number; username: string; password_hash: string; role: string } | undefined : undefined;
+    const account = input.success ? accountByUsername(input.data.username) : undefined;
     const valid = account && input.success ? await argon2.verify(account.password_hash, input.data.password) : false;
     if (!valid || !account) { audit('sign_in', account?.id ?? null, 'failure', request.id); return reply.code(401).send({ code: 'AUTH_INVALID', message: 'Invalid credentials.', requestId: request.id }); }
     const token = randomBytes(32).toString('base64url'); const csrf = randomBytes(24).toString('base64url'); const now = Date.now();
@@ -363,10 +382,12 @@ export async function buildApp(options: AppOptions) {
   });
   app.post('/api/password-reset', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
     const input = passwordResetSchema.safeParse(request.body);
-    const account = input.success ? sqlite.prepare('SELECT id FROM accounts WHERE username = ? COLLATE NOCASE').get(input.data.username) as { id: number } | undefined : undefined;
-    const authorized = passwordResetAvailable && input.success && options.setupSecret && account && secretMatches(input.data.setupSecret.trim(), options.setupSecret.trim()) && input.data.newPassword !== input.data.setupSecret;
+    const account = input.success ? accountByUsername(input.data.username) : undefined;
+    const secretValid = Boolean(input.success && options.setupSecret && copiedSecretMatches(input.data.setupSecret, options.setupSecret));
+    const passwordReusesSetupSecret = Boolean(input.success && options.setupSecret && copiedSecretMatches(input.data.newPassword, options.setupSecret));
+    const authorized = passwordResetAvailable && input.success && options.setupSecret && account && secretValid && !passwordReusesSetupSecret;
     if (!authorized || !input.success || !account) {
-      const reason = !passwordResetAvailable ? 'disabled' : !input.success ? 'invalid_payload' : !options.setupSecret ? 'missing_configured_secret' : !account ? 'unknown_account' : input.data.newPassword === input.data.setupSecret ? 'new_password_matches_secret' : 'secret_mismatch';
+      const reason = !passwordResetAvailable ? 'disabled' : !input.success ? 'invalid_payload' : !options.setupSecret ? 'missing_configured_secret' : !account ? 'unknown_account' : passwordReusesSetupSecret ? 'new_password_matches_secret' : 'secret_mismatch';
       request.log.warn({ reason }, 'Password recovery denied');
       audit('password_reset', account?.id ?? null, 'failure', request.id);
       return reply.code(403).send({ code: 'PASSWORD_RESET_DENIED', message: 'Password recovery could not be authorized.', requestId: request.id });
