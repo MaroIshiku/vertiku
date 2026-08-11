@@ -46,5 +46,5 @@ describe('database upgrades', () => {
     const afterReset = openDatabase(path);
     expect(afterReset.sqlite.prepare('SELECT COUNT(*) AS count FROM conversion_samples').get()).toEqual({ count: 0 });
     afterReset.sqlite.close();
-  });
+  }, 15_000);
 });

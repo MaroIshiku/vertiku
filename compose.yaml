@@ -114,7 +114,7 @@ x-casaos:
   tips:
     before_install:
       en_us: Replace ISHIKU_SETUP_SECRET before first start. Input folders belong in /DATA/AppData/i_vertiku/Input and converted files are written to /DATA/AppData/i_vertiku/Output. Back up /DATA/AppData/i_vertiku/Data and Output before every update.
-  version: "0.5.1"
+  version: "0.5.2"
   update_at: "2026-08-11"
   release_notes:
     en_us: Preserves Linux filename casing for local cover art and continues conversion when an optional cover is unavailable.
