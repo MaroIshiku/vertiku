@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.3 - 2026-08-11
+
+### Fixed
+
+- Made Compose-gated password recovery tolerate surrounding whitespace, accidentally copied YAML quote pairs, and Unicode compatibility forms for the existing username and secret.
+- Store audiobook descriptions only in the dedicated description metadata field and no longer emit a duplicate `comment` tag.
+
+### Security
+
+- Recovery still requires the existing logical username and current setup secret, remains rate-limited and one-use, returns generic denials, revokes every session, and rejects reusing the setup secret as the new password across all accepted copy forms.
+
 ## 0.4.2 - 2026-08-10
 
 ### Added

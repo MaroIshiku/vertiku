@@ -68,7 +68,7 @@ export function buildFfmetadata(metadata: AudiobookMetadata, chapters: Chapter[]
     `composer=${escapeFfmetadata(metadata.narrator ?? '')}`,
     `date=${escapeFfmetadata(metadata.year ?? '')}`,
     `genre=${escapeFfmetadata(metadata.genre ?? 'Audiobook')}`,
-    `comment=${escapeFfmetadata(metadata.description ?? '')}`
+    `description=${escapeFfmetadata(metadata.description ?? '')}`
   ];
   for (const chapter of chapters) {
     const start = cursor;

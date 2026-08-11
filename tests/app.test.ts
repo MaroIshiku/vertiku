@@ -81,20 +81,29 @@ describe('platform and identity endpoints', () => {
     const oldCookie = `${oldLogin.cookies[0]!.name}=${oldLogin.cookies[0]!.value}`;
     expect((await app.inject('/api/setup/status')).json()).toMatchObject({ required: false, passwordResetEnabled: true });
     expect((await app.inject({ method: 'POST', url: '/api/password-reset', payload: { username: 'admin', setupSecret: 'wrong-secret', newPassword: 'replacement-password-123' } })).statusCode).toBe(403);
-    const reset = await app.inject({ method: 'POST', url: '/api/password-reset', payload: { username: 'ADMIN', setupSecret: credentials.setupSecret, newPassword: 'replacement-password-123' } });
+    const replacementPassword = 'replacement-$ymbol&password#123';
+    const reset = await app.inject({ method: 'POST', url: '/api/password-reset', payload: { username: 'ADMIN', setupSecret: credentials.setupSecret, newPassword: replacementPassword } });
     expect(reset.statusCode).toBe(204);
     expect((await app.inject('/api/setup/status')).json()).toMatchObject({ required: false, passwordResetEnabled: false });
     expect((await app.inject({ method: 'GET', url: '/api/session', headers: { cookie: oldCookie } })).statusCode).toBe(401);
     expect((await app.inject({ method: 'POST', url: '/api/session', payload: { username: 'admin', password: credentials.password } })).statusCode).toBe(401);
-    expect((await app.inject({ method: 'POST', url: '/api/session', payload: { username: 'admin', password: 'replacement-password-123' } })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: '/api/session', payload: { username: 'admin', password: replacementPassword } })).statusCode).toBe(200);
     expect((await app.inject({ method: 'POST', url: '/api/password-reset', payload: { username: 'admin', setupSecret: credentials.setupSecret, newPassword: 'another-password-123' } })).statusCode).toBe(403);
   });
 
-  it('accepts copied setup-secret whitespace during recovery without exposing the denial reason', async () => {
+  it('accepts copied Compose quoting, whitespace, and compatibility-equivalent usernames during recovery without exposing the denial reason', async () => {
     const app = await testApp('synthetic-setup-secret-value', false, true);
     await app.inject({ method: 'POST', url: '/api/setup', payload: { username: 'admin', password: 'synthetic-password-123', setupSecret: 'synthetic-setup-secret-value' } });
-    const reset = await app.inject({ method: 'POST', url: '/api/password-reset', payload: { username: 'admin', setupSecret: '  synthetic-setup-secret-value  ', newPassword: 'replacement-password-123' } });
+    const reset = await app.inject({ method: 'POST', url: '/api/password-reset', payload: { username: 'ＡＤＭＩＮ', setupSecret: '  "synthetic-setup-secret-value"  ', newPassword: 'replacement-password-123' } });
     expect(reset.statusCode).toBe(204);
+  });
+
+  it('does not accept the configured setup secret as the new password through copied quoting', async () => {
+    const app = await testApp('synthetic-setup-secret-value', false, true);
+    await app.inject({ method: 'POST', url: '/api/setup', payload: { username: 'admin', password: 'synthetic-password-123', setupSecret: 'synthetic-setup-secret-value' } });
+    const reset = await app.inject({ method: 'POST', url: '/api/password-reset', payload: { username: 'admin', setupSecret: '"synthetic-setup-secret-value"', newPassword: 'synthetic-setup-secret-value' } });
+    expect(reset.statusCode).toBe(403);
+    expect(reset.json()).toMatchObject({ code: 'PASSWORD_RESET_DENIED', message: 'Password recovery could not be authorized.' });
   });
 
   it('clears persistent ETA measurements once per changed Compose reset token', async () => {
