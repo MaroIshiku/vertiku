@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.1 - 2026-08-11
+
+### Fixed
+
+- Preserve the exact filesystem casing of detected local cover files so `Cover.JPG`, `Folder.jpg`, and similar names work on case-sensitive ZimaOS filesystems.
+- Recover already queued v0.5.0 cover references case-insensitively and continue with embedded artwork or no artwork when an optional cover was removed, instead of failing the audiobook.
+
+### Security
+
+- Runtime cover recovery accepts only regular files resolved below Vertiku's trusted read-only input or generated upload roots and does not expose source paths in warning logs.
+
 ## 0.5.0 - 2026-08-11
 
 ### Added

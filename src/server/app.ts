@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync, mkdirSync, statfsSync, statSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, realpathSync, statfsSync, statSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import argon2 from 'argon2';
@@ -197,6 +197,34 @@ export async function buildApp(options: AppOptions) {
     return buildForecastModel(samples, running, now);
   }
 
+  function pathIsWithin(root: string, target: string) {
+    const relativePath = relative(resolve(root), resolve(target));
+    return relativePath !== '..' && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath);
+  }
+
+  function trustedExistingCover(path: string) {
+    try {
+      const actualPath = realpathSync(path);
+      const trusted = [inputDir, uploadsDir].some((root) => {
+        try { return pathIsWithin(realpathSync(root), actualPath); } catch { return false; }
+      });
+      return trusted && statSync(actualPath).isFile() ? actualPath : undefined;
+    } catch { return undefined; }
+  }
+
+  function availableCoverPath(storedPath: string | null) {
+    if (!storedPath) return undefined;
+    const direct = trustedExistingCover(storedPath);
+    if (direct) return direct;
+    if (![inputDir, uploadsDir].some((root) => pathIsWithin(root, storedPath))) return undefined;
+    try {
+      const expectedName = basename(storedPath).toLowerCase();
+      const matchingEntry = readdirSync(dirname(storedPath), { withFileTypes: true })
+        .find((entry) => entry.isFile() && entry.name.toLowerCase() === expectedName);
+      return matchingEntry ? trustedExistingCover(join(dirname(storedPath), matchingEntry.name)) : undefined;
+    } catch { return undefined; }
+  }
+
   function estimatedRemainingMs(row: JobRow, model: ReturnType<typeof buildForecastModel>, now = Date.now()) {
     return estimateJobRemainingMs(row, model, now);
   }
@@ -286,10 +314,12 @@ export async function buildApp(options: AppOptions) {
       } catch (error) { if (error instanceof JobFailure) throw error; }
       sqlite.prepare('UPDATE jobs SET output_path = ?, updated_at = ? WHERE id = ?').run(workingPath, Date.now(), job.id);
       sqlite.prepare("UPDATE jobs SET phase = 'encoding_audio', progress = 10, updated_at = ? WHERE id = ? AND status = 'running'").run(Date.now(), job.id);
+      const coverPath = availableCoverPath(draft.cover_path);
+      if (draft.cover_path && !coverPath) app.log.warn({ jobId: job.id, jobRef: job.id.slice(0, 8) }, 'Optional audiobook cover was unavailable; continuing without it');
       await (options.convert ?? convertToM4b)({
-        ffmpegPath: options.ffmpegPath ?? 'ffmpeg', ffprobePath: options.ffprobePath ?? 'ffprobe', outputPath: workingPath, coverPath: draft.cover_path ?? undefined, bitrateKbps: job.bitrate_kbps,
+        ffmpegPath: options.ffmpegPath ?? 'ffmpeg', ffprobePath: options.ffprobePath ?? 'ffprobe', outputPath: workingPath, coverPath, bitrateKbps: job.bitrate_kbps,
         metadata: resolvedMetadata,
-        embeddedCoverSourcePath: !draft.cover_path && firstInspection?.embeddedCover ? rows[0]?.storage_path : undefined,
+        embeddedCoverSourcePath: !coverPath && firstInspection?.embeddedCover ? rows[0]?.storage_path : undefined,
         sources: chapters.map((chapter) => { const row = rowById.get(chapter.sourceId)!; return { path: row.storage_path, title: chapter.title, durationMs: row.duration_ms }; }),
         onProgress: (progress) => sqlite.prepare("UPDATE jobs SET phase = 'encoding_audio', progress = ?, updated_at = ? WHERE id = ? AND status = 'running'").run(Math.min(94, Math.max(10, Math.round(10 + progress * 0.84))), Date.now(), job.id),
         onPhase: (phase) => sqlite.prepare("UPDATE jobs SET phase = ?, progress = ?, updated_at = ? WHERE id = ? AND status = 'running'").run(phase, phase === 'validating_output' ? 96 : 10, Date.now(), job.id),
@@ -366,7 +396,7 @@ export async function buildApp(options: AppOptions) {
   app.get('/health/ready', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (_request, reply) => {
     try { sqlite.prepare('SELECT 1').get(); return { status: 'ready', database: 'ok', storage: 'ok', input: existsSync(inputDir) ? 'mounted' : 'not-mounted', output: existsSync(outputDir) ? 'mounted' : 'not-mounted' }; } catch { return reply.code(503).send({ status: 'not-ready' }); }
   });
-  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.5.0', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
+  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.5.1', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
   app.get('/api/setup/status', async () => ({ required: Number((sqlite.prepare('SELECT COUNT(*) AS count FROM accounts').get() as { count: number }).count) === 0, passwordResetEnabled: passwordResetAvailable }));
 
   app.post('/api/setup', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {

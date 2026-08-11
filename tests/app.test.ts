@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -146,12 +146,14 @@ describe('persistent conversion queue', () => {
     const inputDir = join(dataDir, 'input'); const outputDir = join(dataDir, 'output');
     mkdirSync(join(inputDir, 'Dan Simmons - Drood'), { recursive: true }); mkdirSync(join(inputDir, 'Second Author - Second Book'), { recursive: true });
     writeFileSync(join(inputDir, 'Dan Simmons - Drood', '001 - Drood.mp3'), 'synthetic'); writeFileSync(join(inputDir, 'Dan Simmons - Drood', '002 - Drood.mp3'), 'synthetic');
+    writeFileSync(join(inputDir, 'Dan Simmons - Drood', 'Cover.JPG'), 'synthetic cover');
     writeFileSync(join(inputDir, 'Second Author - Second Book', '01 - Opening.mp3'), 'synthetic');
-    const releases: Array<() => void> = []; const convertedMetadata: Array<{ title: string; author?: string }> = []; let active = 0; let maximumActive = 0;
+    const removableCover = join(inputDir, 'Second Author - Second Book', 'Folder.jpg'); writeFileSync(removableCover, 'synthetic cover');
+    const releases: Array<() => void> = []; const convertedMetadata: Array<{ title: string; author?: string }> = []; const convertedCovers: Array<string | undefined> = []; let active = 0; let maximumActive = 0;
     const app = await buildApp({
       databasePath: join(dataDir, 'vertiku.sqlite'), dataDir, inputDir, outputDir, cookieSecure: false, setupSecret: 'synthetic-setup-secret-value', maxConcurrentJobs: 8,
       inspect: async (_binary, path) => ({ durationMs: 1_000, metadata: path.includes('Drood') ? { title: 'Embedded Drood', author: 'Embedded Author', narrator: '', year: '', genre: '', description: '' } : { title: '', author: '', narrator: '', year: '', genre: '', description: '' }, embeddedCover: false }),
-      convert: async (input) => { convertedMetadata.push(input.metadata); active += 1; maximumActive = Math.max(maximumActive, active); input.onPhase?.('encoding_audio'); await new Promise<void>((resolve) => releases.push(resolve)); input.onPhase?.('validating_output'); writeFileSync(input.outputPath, 'validated batch audiobook'); active -= 1; }
+      convert: async (input) => { convertedMetadata.push(input.metadata); convertedCovers.push(input.coverPath); active += 1; maximumActive = Math.max(maximumActive, active); input.onPhase?.('encoding_audio'); await new Promise<void>((resolve) => releases.push(resolve)); input.onPhase?.('validating_output'); writeFileSync(input.outputPath, 'validated batch audiobook'); active -= 1; }
     }); apps.push(app);
     const credentials = { username: 'admin', password: 'synthetic-password-123', setupSecret: 'synthetic-setup-secret-value' };
     await app.inject({ method: 'POST', url: '/api/setup', payload: credentials });
@@ -168,6 +170,8 @@ describe('persistent conversion queue', () => {
     expect(queued.statusCode).toBe(202); expect(queued.json().accepted).toBe(2);
     expect((await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().queue).toMatchObject({ remainingJobs: 2, confidence: 'learning' });
     await waitFor(() => releases.length === 1); expect(maximumActive).toBe(1);
+    expect(convertedCovers[0]).toBe(join(inputDir, 'Dan Simmons - Drood', 'Cover.JPG'));
+    unlinkSync(removableCover);
     const liveQueue = (await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json() as { jobs: Array<{ id: string; status: string; phase: string; estimatedRemainingSeconds?: number; estimatedFinishAt?: string }>; queue: { remainingJobs: number; queuedJobs: number; estimatedRemainingSeconds: number; estimatedFinishAt?: string; currentJobId?: string; currentJobEstimatedRemainingSeconds?: number } };
     const running = liveQueue.jobs.find((job) => job.status === 'running')!;
     expect(running).toMatchObject({ phase: 'encoding_audio' });
@@ -181,8 +185,35 @@ describe('persistent conversion queue', () => {
     expect(existsSync(join(inputDir, 'Dan Simmons - Drood', '001 - Drood.mp3'))).toBe(true);
     expect(readdirSync(join(dataDir, 'uploads'))).toHaveLength(0);
     expect(convertedMetadata).toContainEqual(expect.objectContaining({ title: 'Embedded Drood', author: 'Embedded Author' }));
+    expect(convertedCovers).toEqual([join(inputDir, 'Dan Simmons - Drood', 'Cover.JPG'), undefined]);
     const rescanned = (await app.inject({ method: 'GET', url: '/api/input-books', headers: { cookie } })).json().books as Array<{ id: string; issues: Array<{ code: string }> }>;
     expect(rescanned.find((book) => book.id === 'Dan Simmons - Drood')?.issues).toContainEqual(expect.objectContaining({ code: 'ALREADY_CONVERTED' }));
+  });
+
+  it('ignores a persisted cover path outside trusted input and upload roots', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'vertiku-cover-boundary-')); directories.push(dataDir);
+    const databasePath = join(dataDir, 'vertiku.sqlite'); const inputDir = join(dataDir, 'input'); const outputDir = join(dataDir, 'output');
+    mkdirSync(join(inputDir, 'Book'), { recursive: true }); mkdirSync(outputDir);
+    writeFileSync(join(inputDir, 'Book', '01.mp3'), 'synthetic');
+    const outsideCover = join(dataDir, 'outside.jpg'); writeFileSync(outsideCover, 'untrusted synthetic cover');
+    let receivedCover: string | undefined = 'not-called';
+    const app = await buildApp({
+      databasePath, dataDir, inputDir, outputDir, cookieSecure: false, setupSecret: 'synthetic-setup-secret-value',
+      inspect: async () => ({ durationMs: 1_000, metadata: { title: '', author: '', narrator: '', year: '', genre: '', description: '' }, embeddedCover: false }),
+      convert: async (input) => { receivedCover = input.coverPath; writeFileSync(input.outputPath, 'validated synthetic audiobook'); }
+    }); apps.push(app);
+    const credentials = { username: 'admin', password: 'synthetic-password-123', setupSecret: 'synthetic-setup-secret-value' };
+    await app.inject({ method: 'POST', url: '/api/setup', payload: credentials });
+    const login = await app.inject({ method: 'POST', url: '/api/session', payload: { username: credentials.username, password: credentials.password } });
+    const cookie = `${login.cookies[0]!.name}=${login.cookies[0]!.value}`; const csrf = login.json().csrf as string;
+    const draftResponse = await app.inject({ method: 'POST', url: '/api/drafts/from-input', headers: { cookie, 'x-csrf-token': csrf }, payload: { folderId: 'Book' } });
+    const draft = draftResponse.json() as { id: string; sources: Array<{ id: string; title: string }> };
+    const database = new DatabaseSync(databasePath); database.prepare('UPDATE drafts SET cover_path = ? WHERE id = ?').run(outsideCover, draft.id); database.close();
+    const queued = await app.inject({ method: 'POST', url: '/api/jobs', headers: { cookie, 'x-csrf-token': csrf }, payload: { draftId: draft.id, title: 'Book', destination: 'output', bitrateKbps: 96, chapters: draft.sources.map((source) => ({ sourceId: source.id, title: source.title })) } });
+    expect(queued.statusCode).toBe(202);
+    const jobId = queued.json().id as string;
+    await waitFor(async () => (await app.inject({ method: 'GET', url: `/api/jobs/${jobId}`, headers: { cookie } })).json().status === 'completed');
+    expect(receivedCover).toBeUndefined();
   });
 
   it('queues FIFO with bounded concurrency and publishes output without a data result copy', async () => {
