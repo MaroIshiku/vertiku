@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.0 - 2026-08-11
+
+### Added
+
+- Added owner-scoped actions to clear all failed and cancelled jobs or one terminal job from the overview without deleting source files, completed audiobooks, conversion results, or durable ETA samples.
+- Added searchable short job references to concise conversion errors while retaining full structured diagnostics in the container log.
+
+### Changed
+
+- Replaced the all-input FFmpeg filter graph with a bounded sequential decoder-to-encoder PCM stream, so large chapter sets keep only one source decoder and one output encoder active without creating a second full-size audiobook copy.
+- Reduced FFmpeg output to actual engine errors and record the job ID, phase, progress, source count, and failure code in structured logs.
+
+### Fixed
+
+- Fixed immediate FFmpeg failures for audiobooks containing tens or hundreds of MP3 source files, including sources with embedded cover art.
+- Archived jobs no longer appear in live updates, direct job details, or retry actions.
+
+### Security
+
+- Job-history mutations require an authenticated owner session and valid CSRF proof; archiving is additive and non-destructive.
+- Detailed engine diagnostics are no longer returned through the authenticated jobs API or rendered in the browser UI.
+
 ## 0.4.3 - 2026-08-11
 
 ### Fixed

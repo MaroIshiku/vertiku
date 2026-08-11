@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/server/app.js';
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
@@ -230,6 +230,7 @@ describe('persistent conversion queue', () => {
 
   it('cancels every waiting job atomically without interrupting the active conversion', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'vertiku-cancel-waiting-')); directories.push(dataDir);
+    const databasePath = join(dataDir, 'vertiku.sqlite');
     const inputDir = join(dataDir, 'input'); const outputDir = join(dataDir, 'output');
     for (const book of ['Active Book', 'Waiting Book']) {
       mkdirSync(join(inputDir, book), { recursive: true });
@@ -237,7 +238,7 @@ describe('persistent conversion queue', () => {
     }
     const releases: Array<() => void> = [];
     const app = await buildApp({
-      databasePath: join(dataDir, 'vertiku.sqlite'), dataDir, inputDir, outputDir, cookieSecure: false, setupSecret: 'synthetic-setup-secret-value',
+      databasePath, dataDir, inputDir, outputDir, cookieSecure: false, setupSecret: 'synthetic-setup-secret-value',
       probe: async () => 1_000,
       convert: async (input) => { await new Promise<void>((resolve) => releases.push(resolve)); writeFileSync(input.outputPath, 'validated active audiobook'); }
     }); apps.push(app);
@@ -264,6 +265,29 @@ describe('persistent conversion queue', () => {
     history = (await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().jobs as Array<{ id: string; status: string }>;
     expect(history).toEqual(expect.arrayContaining([expect.objectContaining({ id: active.json().id, status: 'completed' }), expect.objectContaining({ id: waiting.json().id, status: 'cancelled' })]));
     expect(releases).toHaveLength(1);
+
+    let database = new DatabaseSync(databasePath);
+    database.prepare("INSERT INTO accounts (id, username, password_hash, role) VALUES (2, 'other-owner', 'synthetic-hash', 'admin')").run();
+    database.prepare("INSERT INTO jobs (id, draft_id, owner_id, status, progress, title, created_at, updated_at) VALUES ('other-failed', ?, 2, 'failed', 0, 'Other owner failure', 1, 1)").run(waiting.json().id ? (database.prepare('SELECT draft_id FROM jobs WHERE id = ?').get(waiting.json().id) as { draft_id: string }).draft_id : 'missing');
+    database.close();
+
+    expect((await app.inject({ method: 'POST', url: '/api/jobs/clear-stopped', headers: { cookie }, payload: {} })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'POST', url: '/api/jobs/clear-stopped', headers, payload: {} })).json()).toEqual({ cleared: 1 });
+    history = (await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().jobs as Array<{ id: string; status: string }>;
+    expect(history).toEqual([expect.objectContaining({ id: active.json().id, status: 'completed' })]);
+
+    expect((await app.inject({ method: 'POST', url: `/api/jobs/${active.json().id}/clear`, headers: { cookie }, payload: {} })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'POST', url: `/api/jobs/${active.json().id}/clear`, headers, payload: {} })).json()).toEqual({ cleared: 1 });
+    expect((await app.inject({ method: 'POST', url: `/api/jobs/${active.json().id}/clear`, headers, payload: {} })).statusCode).toBe(409);
+    expect((await app.inject({ method: 'GET', url: `/api/jobs/${active.json().id}`, headers: { cookie } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().jobs).toEqual([]);
+
+    database = new DatabaseSync(databasePath, { readOnly: true });
+    const archived = database.prepare('SELECT id, status, archived_at FROM jobs WHERE id IN (?, ?, ?) ORDER BY id').all(active.json().id, waiting.json().id, 'other-failed') as Array<{ id: string; status: string; archived_at: number | null }>;
+    database.close();
+    expect(archived.find((job) => job.id === active.json().id)?.archived_at).toEqual(expect.any(Number));
+    expect(archived.find((job) => job.id === waiting.json().id)?.archived_at).toEqual(expect.any(Number));
+    expect(archived.find((job) => job.id === 'other-failed')?.archived_at).toBeNull();
   });
 
   it('retains failed sources, preserves the failed attempt, and retries only through an authorized mutation', async () => {
@@ -276,6 +300,7 @@ describe('persistent conversion queue', () => {
       probe: async () => 1_000,
       convert: async (input) => { attempts += 1; if (attempts === 1) throw new Error('Synthetic encoder interruption.'); writeFileSync(input.outputPath, 'validated retry result'); }
     }); apps.push(app);
+    const logError = vi.spyOn(app.log, 'error');
     const credentials = { username: 'admin', password: 'synthetic-password-123', setupSecret: 'synthetic-setup-secret-value' };
     await app.inject({ method: 'POST', url: '/api/setup', payload: credentials });
     const login = await app.inject({ method: 'POST', url: '/api/session', payload: { username: credentials.username, password: credentials.password } });
@@ -285,11 +310,24 @@ describe('persistent conversion queue', () => {
     await waitFor(async () => ((await app.inject({ method: 'GET', url: `/api/jobs/${queued.json().id}`, headers: { cookie } })).json().status === 'failed'));
     const failed = (await app.inject({ method: 'GET', url: `/api/jobs/${queued.json().id}`, headers: { cookie } })).json();
     expect(failed).toMatchObject({ status: 'failed', retryable: true, error: { code: 'ENGINE_FAILED', retryable: true } });
+    expect(failed.error.message).toBe(`FFmpeg could not convert this audiobook. Check the Vertiku container logs for reference ${failed.id.slice(0, 8)}.`);
+    expect(failed.error.message).not.toContain('Synthetic encoder interruption.');
+    expect(logError).toHaveBeenCalledWith(expect.objectContaining({
+      err: expect.objectContaining({ message: 'Synthetic encoder interruption.' }),
+      jobId: failed.id,
+      jobRef: failed.id.slice(0, 8),
+      jobPhase: 'encoding_audio',
+      jobProgress: 10,
+      failureCode: 'ENGINE_FAILED'
+    }), 'Conversion job failed');
     expect((await app.inject({ method: 'POST', url: `/api/jobs/${failed.id}/retry`, headers: { cookie }, payload: {} })).statusCode).toBe(403);
     const retry = await app.inject({ method: 'POST', url: `/api/jobs/${failed.id}/retry`, headers, payload: {} });
     expect(retry.statusCode).toBe(202); expect(retry.json()).toMatchObject({ status: 'queued', retryOf: failed.id });
     await waitFor(async () => ((await app.inject({ method: 'GET', url: `/api/jobs/${retry.json().id}`, headers: { cookie } })).json().status === 'completed'));
     const history = (await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().jobs as Array<{ id: string; status: string }>;
     expect(history).toEqual(expect.arrayContaining([expect.objectContaining({ id: failed.id, status: 'failed' }), expect.objectContaining({ id: retry.json().id, status: 'completed' })]));
+    expect((await app.inject({ method: 'POST', url: '/api/jobs/clear-stopped', headers, payload: {} })).json()).toEqual({ cleared: 1 });
+    const visible = (await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().jobs as Array<{ id: string; status: string }>;
+    expect(visible).toEqual([expect.objectContaining({ id: retry.json().id, status: 'completed' })]);
   });
 });

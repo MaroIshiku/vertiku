@@ -80,7 +80,9 @@ Every successful conversion stores a small, durable performance measurement in S
 
 ## Workers and engines
 
-This milestone runs a local FFmpeg adapter in the core container. FFmpeg and ffprobe are discovered at runtime. Browser input cannot select commands, executable paths, codecs, filters, or arbitrary arguments. A later worker split can preserve the adapter boundary and dynamic capability model.
+This milestone runs a local FFmpeg adapter in the core container. FFmpeg and ffprobe are discovered at runtime. Browser input cannot select commands, executable paths, codecs, filters, or arbitrary arguments. Source files are decoded one after another into one streaming encoder, keeping process use bounded without writing an intermediate full-size audiobook. A later worker split can preserve the adapter boundary and dynamic capability model.
+
+If a conversion fails unexpectedly, the job card shows a short reference such as `a1b2c3d4`. The complete FFmpeg diagnostic is written only to the container log with that reference and the full job ID. On Compose deployments, inspect it with `docker compose logs vertiku` (or the equivalent ZimaOS container-log view); do not paste the detailed engine output into public issue reports without checking it for local filenames.
 
 ## M4B workflow
 

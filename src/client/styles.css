@@ -203,8 +203,11 @@ button, .button { min-height: var(--touch-target-min); }
 .job-group-heading h2 { margin: 0; font-size: 1.05rem; }
 .job-group-heading > span { min-inline-size: 30px; min-block-size: 30px; display: inline-grid; place-items: center; padding-inline: var(--space-2); border-radius: var(--radius-pill); background: var(--color-surface-soft); color: var(--color-on-surface-muted); font-size: .85rem; font-weight: 800; }
 .jobs-list { display: grid; gap: var(--space-2); }
-.jobs-list > button { inline-size: 100%; min-block-size: 64px; padding: var(--space-3) var(--space-4); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); text-align: start; border: 1px solid var(--color-outline); border-radius: var(--radius-md); background: var(--color-surface-raised); color: var(--color-on-surface); }
-.jobs-list span:first-child { display: grid; gap: var(--space-1); }
+.job-list-item { min-inline-size: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; border: 1px solid var(--color-outline); border-radius: var(--radius-md); background: var(--color-surface-raised); overflow: hidden; }
+.job-list-open { min-inline-size: 0; min-block-size: 64px; padding: var(--space-3) var(--space-4); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); text-align: start; border: 0; border-radius: 0; background: transparent; color: var(--color-on-surface); }
+.job-list-open > span:first-child { min-inline-size: 0; display: grid; gap: var(--space-1); }
+.job-list-open strong, .job-list-open small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-list-clear { min-block-size: 44px; padding-inline: var(--space-3); border: 0; border-inline-start: 1px solid var(--color-outline); border-radius: 0; background: var(--color-surface-soft); color: var(--color-primary); font-weight: 750; }
 .jobs-list small { color: var(--color-on-surface-muted); }
 .about-card .app-icon { margin-block-end: var(--space-3); }
 .about-card dl { margin: var(--space-5) 0; text-align: start; }
@@ -274,6 +277,10 @@ progress::-webkit-progress-value { background: var(--color-primary); border-radi
   .two-columns .full { grid-column: auto; }
   .destination-switch { grid-template-columns: 1fr; }
   .button-row > * { flex: 1; }
+  .section-heading .button-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .section-heading .button-row > * { inline-size: 100%; }
+  .job-list-item { grid-template-columns: 1fr; }
+  .job-list-clear { border-inline-start: 0; border-block-start: 1px solid var(--color-outline); }
   .job-checklist { padding: var(--space-3); }
   .job-checklist-heading { align-items: start; flex-direction: column; }
   .job-checklist li { padding-inline: var(--space-2); grid-template-columns: 40px minmax(0, 1fr); }

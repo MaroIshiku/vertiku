@@ -64,6 +64,43 @@ export type ConversionInput = {
   onChild?: (child: ChildProcessWithoutNullStreams) => void;
 };
 
+type ProcessResult = { code: number | null; signal: NodeJS.Signals | null; error?: Error };
+
+function processResult(child: ChildProcessWithoutNullStreams): Promise<ProcessResult> {
+  return new Promise((resolvePromise) => {
+    child.once('error', (error) => resolvePromise({ code: null, signal: null, error }));
+    child.once('close', (code, signal) => resolvePromise({ code, signal }));
+  });
+}
+
+function appendDiagnostic(current: string, chunk: string): string {
+  return `${current}${chunk}`.slice(-64 * 1024);
+}
+
+function waitForDrain(encoder: ChildProcessWithoutNullStreams): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    const cleanup = () => {
+      encoder.stdin.off('drain', onDrain);
+      encoder.stdin.off('error', onError);
+      encoder.stdin.off('close', onClose);
+    };
+    const onDrain = () => { cleanup(); resolvePromise(); };
+    const onError = (error: Error) => { cleanup(); reject(error); };
+    const onClose = () => { cleanup(); reject(new Error('FFmpeg output encoder closed its audio input unexpectedly.')); };
+    encoder.stdin.once('drain', onDrain);
+    encoder.stdin.once('error', onError);
+    encoder.stdin.once('close', onClose);
+  });
+}
+
+async function forwardDecodedAudio(decoder: ChildProcessWithoutNullStreams, encoder: ChildProcessWithoutNullStreams): Promise<void> {
+  for await (const chunk of decoder.stdout) {
+    if (encoder.stdin.destroyed) throw new Error('FFmpeg output encoder closed its audio input unexpectedly.');
+    if (encoder.stdin.write(chunk)) continue;
+    await waitForDrain(encoder);
+  }
+}
+
 export async function convertToM4b(input: ConversionInput): Promise<void> {
   if (input.sources.length === 0) throw new Error('At least one audio source is required.');
   const output = resolve(input.outputPath);
@@ -71,52 +108,93 @@ export async function convertToM4b(input: ConversionInput): Promise<void> {
   const chapters: Chapter[] = input.sources.map((source) => ({ title: source.title, durationMs: source.durationMs }));
   await writeFile(metadataPath, buildFfmetadata(input.metadata, chapters), { encoding: 'utf8', mode: 0o600 });
   try {
-  const inputArgs = input.sources.flatMap((source) => ['-i', resolve(source.path)]);
-  const metadataIndex = input.sources.length;
-  const coverIndex = metadataIndex + 1;
-  const filters = input.sources.map((_source, index) => `[${index}:a:0]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a${index}]`).join(';');
-  const concatInputs = input.sources.map((_source, index) => `[a${index}]`).join('');
-  const args = [
-    '-hide_banner', '-y', '-nostdin', '-progress', 'pipe:1', '-nostats',
-    ...inputArgs,
-    '-f', 'ffmetadata', '-i', metadataPath,
-    ...(input.coverPath ? ['-i', resolve(input.coverPath)] : []),
-    '-filter_complex', `${filters};${concatInputs}concat=n=${input.sources.length}:v=0:a=1[audio]`,
-    '-map', '[audio]', '-map_metadata', String(metadataIndex),
-    ...(input.coverPath
-      ? ['-map', `${coverIndex}:v:0`, '-c:v', 'mjpeg', '-disposition:v:0', 'attached_pic', '-metadata:s:v:0', 'title=Cover']
-      : input.embeddedCoverSourcePath
-        ? ['-map', '0:v:0', '-c:v', 'mjpeg', '-disposition:v:0', 'attached_pic', '-metadata:s:v:0', 'title=Cover']
+    const coverSourcePath = input.coverPath ?? input.embeddedCoverSourcePath;
+    const encoderArgs = [
+      '-hide_banner', '-loglevel', 'error', '-y', '-progress', 'pipe:1', '-nostats',
+      '-f', 'f32le', '-ar', '44100', '-ac', '2', '-i', 'pipe:0',
+      '-f', 'ffmetadata', '-i', metadataPath,
+      ...(coverSourcePath ? ['-i', resolve(coverSourcePath)] : []),
+      '-map', '0:a:0', '-map_metadata', '1', '-map_chapters', '1',
+      ...(coverSourcePath
+        ? ['-map', '2:v:0', '-c:v', 'mjpeg', '-disposition:v:0', 'attached_pic', '-metadata:s:v:0', 'title=Cover']
         : []),
-    '-c:a', 'aac', '-b:a', `${input.bitrateKbps}k`, '-movflags', '+faststart', output
-  ];
-  const totalMs = input.sources.reduce((sum, source) => sum + source.durationMs, 0);
-  input.onPhase?.('encoding_audio');
-  await new Promise<void>((resolvePromise, reject) => {
-    const child = spawn(input.ffmpegPath, args, { shell: false, windowsHide: true });
-    input.onChild?.(child);
-    let stderr = '';
-    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => {
+      '-c:a', 'aac', '-b:a', `${input.bitrateKbps}k`, '-movflags', '+faststart', output
+    ];
+    const totalMs = input.sources.reduce((sum, source) => sum + source.durationMs, 0);
+    input.onPhase?.('encoding_audio');
+    const encoder = spawn(input.ffmpegPath, encoderArgs, { shell: false, windowsHide: true });
+    input.onChild?.(encoder);
+    let encoderStderr = '';
+    let activeDecoder: ChildProcessWithoutNullStreams | undefined;
+    encoder.stdout.setEncoding('utf8'); encoder.stderr.setEncoding('utf8');
+    encoder.stdin.on('error', () => { /* The encoder result below carries the actionable diagnostic. */ });
+    encoder.stdout.on('data', (chunk: string) => {
       for (const line of chunk.split(/\r?\n/)) {
         if (!line.startsWith('out_time_us=')) continue;
         const progress = Math.min(99, Math.max(0, Math.round((Number(line.slice(12)) / 1000 / totalMs) * 100)));
         if (Number.isFinite(progress)) input.onProgress?.(progress);
       }
     });
-    child.stderr.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-3000); });
-    child.on('error', reject);
-    child.on('close', (code, signal) => code === 0 ? resolvePromise() : reject(new Error(signal ? 'Conversion was cancelled.' : `FFmpeg failed (${code}): ${stderr}`)));
-  });
-  input.onPhase?.('validating_output');
-  const result = await runJson(input.ffprobePath, ['-v', 'error', '-show_entries', 'format=duration:format_tags=title,artist,album', '-show_chapters', '-of', 'json', output]);
-  const duration = Number(result.format?.duration);
-  const expectedDuration = totalMs / 1000;
-  if (!Number.isFinite(duration) || Math.abs(duration - expectedDuration) > Math.max(2, expectedDuration * 0.02)) throw new Error('Result duration validation failed.');
-  if ((result.chapters?.length ?? 0) !== chapters.length) throw new Error('Result chapter-count validation failed.');
-  const actualTitles = result.chapters?.map((chapter) => chapter.tags?.title ?? '') ?? [];
-  if (actualTitles.some((title, index) => title !== chapters[index]?.title)) throw new Error('Result chapter-title validation failed.');
-  if (result.format?.tags?.title !== input.metadata.title) throw new Error('Result metadata validation failed.');
+    encoder.stderr.on('data', (chunk: string) => { encoderStderr = appendDiagnostic(encoderStderr, chunk); });
+    const encoderResult = processResult(encoder);
+    encoder.once('close', () => activeDecoder?.kill('SIGTERM'));
+
+    try {
+      for (const [index, source] of input.sources.entries()) {
+        const decoderArgs = [
+          '-hide_banner', '-loglevel', 'error', '-nostdin', '-i', resolve(source.path),
+          '-map', '0:a:0', '-vn', '-f', 'f32le', '-c:a', 'pcm_f32le', '-ar', '44100', '-ac', '2', 'pipe:1'
+        ];
+        const decoder = spawn(input.ffmpegPath, decoderArgs, { shell: false, windowsHide: true });
+        activeDecoder = decoder;
+        let decoderStderr = '';
+        decoder.stderr.setEncoding('utf8');
+        decoder.stderr.on('data', (chunk: string) => { decoderStderr = appendDiagnostic(decoderStderr, chunk); });
+        const decoderResult = processResult(decoder);
+        try {
+          await forwardDecodedAudio(decoder, encoder);
+          const { code, signal, error } = await decoderResult;
+          if (error) throw new Error(`FFmpeg source decoder could not start at part ${index + 1}/${input.sources.length}: ${error.message}`, { cause: error });
+          if (code !== 0) {
+            throw new Error(signal
+              ? `FFmpeg source decoder was terminated at part ${index + 1}/${input.sources.length} (${signal}).`
+              : `FFmpeg source decoder failed at part ${index + 1}/${input.sources.length} (code ${code}): ${decoderStderr}`);
+          }
+        } catch (error) {
+          decoder.kill('SIGTERM');
+          throw error;
+        } finally {
+          activeDecoder = undefined;
+        }
+      }
+      encoder.stdin.end();
+      const { code, signal, error } = await encoderResult;
+      if (error) throw new Error(`FFmpeg output encoder could not start: ${error.message}`, { cause: error });
+      if (code !== 0) {
+        throw new Error(signal
+          ? 'Conversion was cancelled.'
+          : `FFmpeg output encoder failed (code ${code}): ${encoderStderr}`);
+      }
+    } catch (error) {
+      activeDecoder?.kill('SIGTERM');
+      if (!encoder.killed) encoder.kill('SIGTERM');
+      const encoderOutcome = await encoderResult;
+      if (encoderOutcome.error) throw new Error(`FFmpeg output encoder could not start: ${encoderOutcome.error.message}`, { cause: encoderOutcome.error });
+      if (error instanceof Error && /EPIPE|premature close/i.test(error.message) && encoderStderr) {
+        throw new Error(`FFmpeg output encoder failed: ${encoderStderr}`, { cause: error });
+      }
+      throw error;
+    }
+
+    input.onPhase?.('validating_output');
+    const result = await runJson(input.ffprobePath, ['-v', 'error', '-show_entries', 'format=duration:format_tags=title,artist,album', '-show_chapters', '-of', 'json', output]);
+    const duration = Number(result.format?.duration);
+    const expectedDuration = totalMs / 1000;
+    if (!Number.isFinite(duration) || Math.abs(duration - expectedDuration) > Math.max(2, expectedDuration * 0.02)) throw new Error(`Result duration validation failed (expected ${expectedDuration.toFixed(3)} seconds, got ${Number.isFinite(duration) ? duration.toFixed(3) : 'an unreadable duration'}).`);
+    if ((result.chapters?.length ?? 0) !== chapters.length) throw new Error('Result chapter-count validation failed.');
+    const actualTitles = result.chapters?.map((chapter) => chapter.tags?.title ?? '') ?? [];
+    if (actualTitles.some((title, index) => title !== chapters[index]?.title)) throw new Error('Result chapter-title validation failed.');
+    if (result.format?.tags?.title !== input.metadata.title) throw new Error('Result metadata validation failed.');
   } finally {
     await rm(metadataPath, { force: true });
   }
