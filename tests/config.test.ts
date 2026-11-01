@@ -34,4 +34,11 @@ describe('runtime configuration', () => {
     expect(loadConfig({ VERTIKU_PASSWORD_RESET: 'TRUE' }).passwordResetEnabled).toBe(true);
     expect(() => loadConfig({ VERTIKU_PASSWORD_RESET: 'yes' })).toThrow();
   });
+
+  it('keeps private uploads for seven days by default and bounds the configurable retention', () => {
+    expect(loadConfig({}).uploadRetentionDays).toBe(7);
+    expect(loadConfig({ VERTIKU_UPLOAD_RETENTION_DAYS: '30' }).uploadRetentionDays).toBe(30);
+    expect(() => loadConfig({ VERTIKU_UPLOAD_RETENTION_DAYS: '0' })).toThrow();
+    expect(() => loadConfig({ VERTIKU_UPLOAD_RETENTION_DAYS: '366' })).toThrow();
+  });
 });

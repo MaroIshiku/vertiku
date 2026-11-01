@@ -40,6 +40,7 @@ services:
       VERTIKU_PASSWORD_RESET: "false"
       VERTIKU_ETA_HISTORY_RESET_TOKEN: ""
       VERTIKU_MAX_UPLOAD_GIB: "10"
+      VERTIKU_UPLOAD_RETENTION_DAYS: "7"
     volumes:
       - type: bind
         source: /DATA/AppData/i_vertiku/Data
@@ -76,6 +77,9 @@ services:
         - container: VERTIKU_PASSWORD_RESET
           description:
             en_us: Set to true only for one password-recovery restart, then return it to false
+        - container: VERTIKU_UPLOAD_RETENTION_DAYS
+          description:
+            en_us: Days before unused browser uploads and upload copies that can no longer be retried are removed from /data (1-365)
         - container: VERTIKU_ETA_HISTORY_RESET_TOKEN
           description:
             en_us: Change to a new value once after moving Vertiku to different hardware; the same value never resets twice

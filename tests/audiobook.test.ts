@@ -32,7 +32,20 @@ describe('audiobook chapter model', () => {
   });
 
   it('removes path and control characters from download names', () => {
-    expect(safeDownloadName('../A: Book?')).toBe('..A Book.m4b');
+    expect(safeDownloadName('../A: Book?')).toBe('A Book.m4b');
+    expect(safeDownloadName('...')).toBe('audiobook.m4b');
+    expect(safeDownloadName('Tab\tand\u007fdelete')).toBe('Tabanddelete.m4b');
+  });
+
+  it('keeps generated filenames within the filesystem byte limit, including a collision suffix', () => {
+    const encoder = new TextEncoder();
+    for (const title of ['A'.repeat(250), 'Ä'.repeat(250), '漢'.repeat(250), '😀'.repeat(120)]) {
+      const name = safeDownloadName(title);
+      expect(name.endsWith('.m4b')).toBe(true);
+      expect(encoder.encode(name.replace(/\.m4b$/, ' (10000).m4b')).length).toBeLessThanOrEqual(255);
+      expect(name).not.toContain('\uFFFD');
+    }
+    expect(safeDownloadName('Short title')).toBe('Short title.m4b');
   });
 });
 

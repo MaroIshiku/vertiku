@@ -28,6 +28,7 @@ button, .button { min-height: var(--touch-target-min); }
 .message { padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); }
 .message.error { color: var(--color-on-danger-container); background: var(--color-danger-container); }
 .message.success { color: var(--color-on-success-container); background: var(--color-success-container); }
+.message.info { color: var(--color-on-info-container); background: var(--color-info-container); }
 .recovery-panel { inline-size: 100%; margin-block-start: var(--space-5); padding-block-start: var(--space-5); border-block-start: 1px solid var(--color-outline); text-align: start; }
 .recovery-panel h2 { margin: var(--space-1) 0 var(--space-2); font-size: var(--type-title-large-size); }
 .recovery-panel > p:not(.eyebrow) { margin: 0; color: var(--color-on-surface-muted); line-height: var(--type-body-medium-line); }
@@ -150,6 +151,8 @@ button, .button { min-height: var(--touch-target-min); }
 .destination-switch button { min-block-size: 76px; padding: var(--space-3); display: grid; align-content: center; gap: var(--space-1); border: 1px solid var(--color-outline); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-on-surface); text-align: start; }
 .destination-switch button[aria-pressed="true"] { border-color: transparent; background: var(--color-primary-container); color: var(--color-on-primary-container); }
 .destination-switch small { color: var(--color-on-surface-muted); }
+/* The muted surface tone falls below 4.5:1 on the selected container; inherit its on-container color instead. */
+.destination-switch button[aria-pressed="true"] small { color: inherit; }
 
 .job-card, .about-card { max-inline-size: 720px; margin-inline: auto; text-align: center; }
 .job-summary { text-align: center; }

@@ -2,8 +2,16 @@ import { basename, extname } from 'node:path';
 
 const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 
+export const AUDIO_EXTENSIONS: ReadonlySet<string> = new Set(['.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus']);
+export const COVER_EXTENSIONS: ReadonlySet<string> = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+
 export function naturalSort<T>(items: T[], name: (item: T) => string): T[] {
   return [...items].sort((left, right) => collator.compare(name(left), name(right)));
+}
+
+export function formatDuration(milliseconds: number): string {
+  const total = Math.round(milliseconds / 1000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
 export function chapterTitleFromFilename(filename: string): string {
@@ -78,7 +86,23 @@ export function buildFfmetadata(metadata: AudiobookMetadata, chapters: Chapter[]
   return `${lines.join('\n')}\n`;
 }
 
+// Leaves room for a " (10000)" collision suffix and the extension within the common 255-byte filename limit.
+const MAX_FILENAME_STEM_BYTES = 200;
+const utf8 = new TextEncoder();
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (utf8.encode(value).length <= maxBytes) return value;
+  let result = ''; let bytes = 0;
+  for (const character of value) {
+    const size = utf8.encode(character).length;
+    if (bytes + size > maxBytes) break;
+    result += character; bytes += size;
+  }
+  return result.trimEnd();
+}
+
 export function safeDownloadName(title: string): string {
-  const safe = title.normalize('NFKC').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '').replace(/\s+/g, ' ').trim();
+  const cleaned = title.normalize('NFKC').replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().replace(/^[.\s]+/, '');
+  const safe = truncateUtf8(cleaned, MAX_FILENAME_STEM_BYTES);
   return `${safe || 'audiobook'}.m4b`;
 }

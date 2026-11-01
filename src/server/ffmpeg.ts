@@ -11,6 +11,7 @@ type ProbeResult = {
 
 export type EmbeddedMetadata = { title: string; author: string; narrator: string; year: string; genre: string; description: string };
 export type AudioInspection = { durationMs: number; metadata: EmbeddedMetadata; embeddedCover: boolean };
+export const emptyEmbeddedMetadata = (): EmbeddedMetadata => ({ title: '', author: '', narrator: '', year: '', genre: '', description: '' });
 
 function runJson(binary: string, args: string[]): Promise<ProbeResult> {
   return new Promise((resolvePromise, reject) => {
@@ -128,8 +129,12 @@ export async function convertToM4b(input: ConversionInput): Promise<void> {
     let activeDecoder: ChildProcessWithoutNullStreams | undefined;
     encoder.stdout.setEncoding('utf8'); encoder.stderr.setEncoding('utf8');
     encoder.stdin.on('error', () => { /* The encoder result below carries the actionable diagnostic. */ });
+    let pendingProgress = '';
     encoder.stdout.on('data', (chunk: string) => {
-      for (const line of chunk.split(/\r?\n/)) {
+      // Progress lines can be split across chunks; only parse complete lines so progress never jumps backwards.
+      const lines = `${pendingProgress}${chunk}`.split(/\r?\n/);
+      pendingProgress = (lines.pop() ?? '').slice(-256);
+      for (const line of lines) {
         if (!line.startsWith('out_time_us=')) continue;
         const progress = Math.min(99, Math.max(0, Math.round((Number(line.slice(12)) / 1000 / totalMs) * 100)));
         if (Number.isFinite(progress)) input.onProgress?.(progress);

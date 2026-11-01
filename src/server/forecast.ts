@@ -64,3 +64,9 @@ export function estimateJobRemainingMs(job: ForecastJob, model: ForecastModel, n
   const byExactDuration = job.source_duration_ms > 0 ? job.source_duration_ms * model.processingToAudioRatio : 0;
   return Math.max(MINIMUM_JOB_MS, byBytes, byExactDuration);
 }
+
+/** Fallback audio duration for unanalyzed sources, assuming a typical 96 kbps audiobook encoding. */
+export const estimateDurationFromBytes = (bytes: number) => Math.max(1_000, Math.round((bytes * 8 / 96_000) * 1000));
+
+/** Expected AAC result size including a small container overhead. */
+export const estimateOutputBytes = (durationMs: number, bitrateKbps: number) => Math.ceil((durationMs / 1000) * bitrateKbps * 1000 / 8 * 1.02);
