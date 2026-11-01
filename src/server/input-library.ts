@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { naturalSort } from '../domain/audiobook.js';
+import { AUDIO_EXTENSIONS, naturalSort } from '../domain/audiobook.js';
 
-const AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus']);
 const COVER_NAMES = ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp', 'folder.jpg', 'folder.png'];
+
+/** Input-folder validation failures with messages that are safe to show in the browser (they never contain container paths). */
+export class InputFolderError extends Error {}
 
 export type PreflightIssue = { code: string; severity: 'warning' | 'error'; message: string };
 export type InputBook = { id: string; title: string; pathLabel: string; fileCount: number; files: string[]; sourceBytes: number; fingerprint: string; issues: PreflightIssue[]; coverPath?: string };
@@ -22,12 +24,17 @@ function coverPathFromEntries(directory: string, entries: ReturnType<typeof safe
 }
 
 export function resolveInputFolder(root: string, folderId: string): string {
-  if (folderId.length > 2000 || folderId.includes('\0')) throw new Error('Invalid input folder.');
+  if (folderId.length > 2000 || folderId.includes('\0')) throw new InputFolderError('Invalid input folder.');
   const rootPath = resolve(root); const target = resolve(rootPath, folderId === '.' ? '' : folderId);
   const relativePath = relative(rootPath, target);
-  if (relativePath.startsWith(`..${sep}`) || relativePath === '..' || isAbsolute(relativePath)) throw new Error('Input folder escapes the configured root.');
+  if (relativePath.startsWith(`..${sep}`) || relativePath === '..' || isAbsolute(relativePath)) throw new InputFolderError('Input folder escapes the configured root.');
   let current = rootPath;
-  for (const segment of relativePath.split(sep).filter(Boolean)) { current = resolve(current, segment); const stat = lstatSync(current); if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('Input folder may not contain symlink traversal.'); }
+  for (const segment of relativePath.split(sep).filter(Boolean)) {
+    current = resolve(current, segment);
+    let stat: ReturnType<typeof lstatSync>;
+    try { stat = lstatSync(current); } catch { throw new InputFolderError('The input folder was not found. Refresh the input library.'); }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new InputFolderError('Input folder may not contain symlink traversal.');
+  }
   return target;
 }
 
@@ -66,7 +73,12 @@ export function scanInputBooks(root: string): InputBook[] {
 
 export function filesForInputBook(root: string, folderId: string) {
   const folder = resolveInputFolder(root, folderId); const entries = safeEntries(folder);
-  const files = naturalSort(entries.filter((entry) => entry.isFile() && AUDIO_EXTENSIONS.has(extname(entry.name).toLowerCase())).map((entry) => { const path = resolve(folder, entry.name); const stat = statSync(path); return { name: entry.name, path, sizeBytes: stat.size, modifiedAt: Math.trunc(stat.mtimeMs) }; }), (file) => file.name);
+  const files = naturalSort(entries.filter((entry) => entry.isFile() && AUDIO_EXTENSIONS.has(extname(entry.name).toLowerCase())).map((entry) => {
+    const path = resolve(folder, entry.name);
+    let stat: ReturnType<typeof statSync>;
+    try { stat = statSync(path); } catch { throw new InputFolderError(`The source files changed while reading ${entry.name}. Refresh the input library.`); }
+    return { name: entry.name, path, sizeBytes: stat.size, modifiedAt: Math.trunc(stat.mtimeMs) };
+  }), (file) => file.name);
   const fingerprint = createHash('sha256').update(files.map((file) => `${file.name}\0${file.sizeBytes}\0${file.modifiedAt}`).join('\n')).digest('hex');
   return { folder, files, sourceBytes: files.reduce((sum, file) => sum + file.sizeBytes, 0), fingerprint, coverPath: coverPathFromEntries(folder, entries) };
 }

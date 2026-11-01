@@ -1,9 +1,9 @@
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildApp } from '../src/server/app.js';
+import { buildApp, type AppOptions } from '../src/server/app.js';
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 const directories: string[] = [];
@@ -255,6 +255,9 @@ describe('persistent conversion queue', () => {
     expect((await app.inject(`/api/jobs/${history[0]!.id}/media`)).statusCode).toBe(401);
     const media = await app.inject({ method: 'GET', url: `/api/jobs/${history[0]!.id}/media`, headers: { cookie, range: 'bytes=0-3' } });
     expect(media.statusCode).toBe(206); expect(media.headers['content-range']).toMatch(/^bytes 0-3\//); expect(media.rawPayload.toString()).toBe('vali');
+    const suffix = await app.inject({ method: 'GET', url: `/api/jobs/${history[0]!.id}/media`, headers: { cookie, range: 'bytes=-4' } });
+    expect(suffix.statusCode).toBe(206); expect(suffix.headers['content-range']).toBe('bytes 25-28/29'); expect(suffix.rawPayload.toString()).toBe('book');
+    expect((await app.inject({ method: 'GET', url: `/api/jobs/${history[0]!.id}/media`, headers: { cookie, range: 'bytes=-0' } })).statusCode).toBe(416);
     expect(readdirSync(outputDir).some((name) => name.includes('.partial.'))).toBe(false);
     expect(existsSync(join(dataDir, 'results')) && readdirSync(join(dataDir, 'results')).length).toBe(0);
   });
@@ -283,6 +286,9 @@ describe('persistent conversion queue', () => {
     };
     const active = await enqueue('Active Book'); await waitFor(() => releases.length === 1);
     const waiting = await enqueue('Waiting Book');
+    const snapshot = (await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().jobs as Array<{ id: string; status: string; queuePosition?: number }>;
+    expect(snapshot.find((job) => job.id === waiting.json().id)).toMatchObject({ status: 'queued', queuePosition: 1 });
+    expect(snapshot.find((job) => job.id === active.json().id)?.queuePosition).toBeUndefined();
 
     expect((await app.inject({ method: 'POST', url: '/api/jobs/cancel-queued', headers: { cookie }, payload: {} })).statusCode).toBe(403);
     expect((await app.inject({ method: 'POST', url: '/api/jobs/cancel-queued', headers, payload: {} })).json()).toEqual({ cancelled: 1 });
@@ -361,4 +367,125 @@ describe('persistent conversion queue', () => {
     const visible = (await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } })).json().jobs as Array<{ id: string; status: string }>;
     expect(visible).toEqual([expect.objectContaining({ id: retry.json().id, status: 'completed' })]);
   });
+});
+
+const credentials = { username: 'admin', password: 'synthetic-password-123', setupSecret: 'synthetic-setup-secret-value' };
+
+async function signedInApp(overrides: Partial<AppOptions> = {}) {
+  const dataDir = mkdtempSync(join(tmpdir(), 'vertiku-hardening-')); directories.push(dataDir);
+  const inputDir = join(dataDir, 'input'); const outputDir = join(dataDir, 'output'); mkdirSync(inputDir); mkdirSync(outputDir);
+  const databasePath = join(dataDir, 'vertiku.sqlite');
+  const app = await buildApp({ databasePath, dataDir, inputDir, outputDir, cookieSecure: false, setupSecret: credentials.setupSecret, ...overrides }); apps.push(app);
+  await app.inject({ method: 'POST', url: '/api/setup', payload: credentials });
+  const login = await app.inject({ method: 'POST', url: '/api/session', payload: { username: credentials.username, password: credentials.password } });
+  const cookie = `${login.cookies[0]!.name}=${login.cookies[0]!.value}`; const csrf = login.json().csrf as string;
+  return { app, dataDir, inputDir, outputDir, databasePath, cookie, csrf, headers: { cookie, 'x-csrf-token': csrf } };
+}
+
+function multipart(files: Array<{ field: string; name: string; type: string; content: string }>) {
+  const boundary = `----vertiku-test-${Math.random().toString(16).slice(2)}`;
+  const body = files.map((file) => `--${boundary}\r\nContent-Disposition: form-data; name="${file.field}"; filename="${file.name}"\r\nContent-Type: ${file.type}\r\n\r\n${file.content}\r\n`).join('') + `--${boundary}--\r\n`;
+  return { payload: body, contentType: `multipart/form-data; boundary=${boundary}` };
+}
+
+describe('review hardening', () => {
+  it('creates exactly one administrator when setup requests race', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'vertiku-setup-race-')); directories.push(dataDir);
+    const databasePath = join(dataDir, 'vertiku.sqlite');
+    const app = await buildApp({ databasePath, dataDir, cookieSecure: false, setupSecret: credentials.setupSecret }); apps.push(app);
+    const responses = await Promise.all(['first-admin', 'second-admin', 'third-admin'].map((username) => app.inject({ method: 'POST', url: '/api/setup', payload: { ...credentials, username } })));
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([201, 409, 409]);
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    const accounts = database.prepare('SELECT COUNT(*) AS count FROM accounts').get() as { count: number };
+    database.close();
+    expect(Number(accounts.count)).toBe(1);
+  });
+
+  it('expires the __Host- session cookie with matching attributes on sign-out', async () => {
+    const { app, headers } = await signedInApp({ cookieSecure: true });
+    const logout = await app.inject({ method: 'DELETE', url: '/api/session', headers });
+    expect(logout.statusCode).toBe(204);
+    const cleared = logout.cookies.find((cookie) => cookie.name === '__Host-vertiku_session');
+    expect(cleared).toMatchObject({ value: '', path: '/', secure: true, httpOnly: true, sameSite: 'Strict' });
+  });
+
+  it('reports storage readiness from the writable data directories', async () => {
+    if (process.getuid?.() === 0) return; // root ignores directory permissions
+    const { app, dataDir } = await signedInApp();
+    expect((await app.inject('/health/ready')).json()).toMatchObject({ status: 'ready', storage: 'ok' });
+    chmodSync(join(dataDir, 'uploads'), 0o500);
+    try {
+      const response = await app.inject('/health/ready');
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ status: 'not-ready', database: 'ok', storage: 'failed' });
+    } finally { chmodSync(join(dataDir, 'uploads'), 0o700); }
+  });
+
+  it('accepts allowlisted audio with a generic browser MIME type and hides engine diagnostics on analysis failures', async () => {
+    const { app, headers, dataDir } = await signedInApp({
+      inspect: async (_binary, path) => {
+        if (path.endsWith('.flac')) throw new Error(`ffprobe failed (1): ${path}: Invalid data found when processing input`);
+        return { durationMs: 1_000, metadata: { title: '', author: '', narrator: '', year: '', genre: '', description: '' }, embeddedCover: false };
+      }
+    });
+    const accepted = multipart([{ field: 'files', name: '01 Opening.opus', type: 'application/octet-stream', content: 'synthetic opus' }]);
+    const draft = await app.inject({ method: 'POST', url: '/api/drafts', headers: { ...headers, 'content-type': accepted.contentType }, payload: accepted.payload });
+    expect(draft.statusCode).toBe(201);
+    const rejected = multipart([{ field: 'files', name: 'notes.txt', type: 'application/octet-stream', content: 'not audio' }]);
+    const notAudio = await app.inject({ method: 'POST', url: '/api/drafts', headers: { ...headers, 'content-type': rejected.contentType }, payload: rejected.payload });
+    expect(notAudio.statusCode).toBe(400); expect(notAudio.json().message).toBe('Unsupported audio file: notes.txt');
+    const broken = multipart([{ field: 'files', name: 'Broken.flac', type: 'audio/flac', content: 'not really flac' }]);
+    const failure = await app.inject({ method: 'POST', url: '/api/drafts', headers: { ...headers, 'content-type': broken.contentType }, payload: broken.payload });
+    expect(failure.statusCode).toBe(400);
+    expect(failure.json()).toMatchObject({ code: 'INVALID_FILE', message: 'Audio could not be read: Broken.flac' });
+    expect(failure.body).not.toContain(dataDir); expect(failure.body).not.toContain('ffprobe');
+  });
+
+  it('keeps input-folder failures generic and free of container paths', async () => {
+    const { app, headers, inputDir } = await signedInApp({ inspect: async (_binary, path) => { throw new Error(`ffprobe failed (1): ${path}: moov atom not found`); } });
+    mkdirSync(join(inputDir, 'Book')); writeFileSync(join(inputDir, 'Book', '01.mp3'), 'synthetic');
+    const unreadable = await app.inject({ method: 'POST', url: '/api/drafts/from-input', headers, payload: { folderId: 'Book' } });
+    expect(unreadable.statusCode).toBe(400); expect(unreadable.json().message).toBe('Audio could not be read: 01.mp3');
+    const missing = await app.inject({ method: 'POST', url: '/api/drafts/from-input', headers, payload: { folderId: 'Missing Book' } });
+    expect(missing.statusCode).toBe(400);
+    for (const response of [unreadable, missing]) { expect(response.body).not.toContain(inputDir); expect(response.body).not.toContain('moov'); }
+  });
+
+  it('does not start encoding when a running job is cancelled during source inspection', async () => {
+    let releaseInspection: (() => void) | undefined; let inspections = 0; let conversions = 0;
+    const { app, headers, cookie, inputDir, databasePath } = await signedInApp({
+      inspect: async () => { inspections += 1; await new Promise<void>((resolve) => { releaseInspection = resolve; }); return { durationMs: 1_000, metadata: { title: '', author: '', narrator: '', year: '', genre: '', description: '' }, embeddedCover: false }; },
+      convert: async (input) => { conversions += 1; writeFileSync(input.outputPath, 'should not be produced'); }
+    });
+    mkdirSync(join(inputDir, 'Slow Book')); writeFileSync(join(inputDir, 'Slow Book', '01.mp3'), 'synthetic');
+    const book = ((await app.inject({ method: 'GET', url: '/api/input-books', headers: { cookie } })).json().books as Array<{ id: string; fingerprint: string; chapters: Array<{ filename: string; title: string }> }>)[0]!;
+    const queued = await app.inject({ method: 'POST', url: '/api/jobs/from-input/batch', headers, payload: { items: [{ folderId: book.id, fingerprint: book.fingerprint, title: 'Slow Book', chapters: book.chapters }] } });
+    const jobId = queued.json().jobs[0].id as string;
+    await waitFor(() => inspections === 1 && Boolean(releaseInspection));
+    expect((await app.inject({ method: 'POST', url: `/api/jobs/${jobId}/cancel`, headers, payload: {} })).statusCode).toBe(202);
+    releaseInspection!();
+    await waitFor(async () => (await app.inject({ method: 'GET', url: `/api/jobs/${jobId}`, headers: { cookie } })).json().status === 'cancelled');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(conversions).toBe(0);
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    const row = database.prepare('SELECT status, finished_at FROM jobs WHERE id = ?').get(jobId) as { status: string; finished_at: number | null };
+    database.close();
+    expect(row).toMatchObject({ status: 'cancelled', finished_at: expect.any(Number) });
+  });
+
+  it('closes open live-update streams so the server can shut down promptly', async () => {
+    const { app, cookie } = await signedInApp();
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const controller = new AbortController();
+    const response = await fetch(`${address}/api/jobs/events`, { headers: { cookie }, signal: controller.signal });
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    const reader = response.body!.getReader();
+    const first = new TextDecoder().decode((await reader.read()).value);
+    expect(first).toContain('event: jobs');
+    const started = Date.now();
+    await app.close(); apps.splice(apps.indexOf(app), 1);
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect((await reader.read()).done).toBe(true);
+    controller.abort();
+  }, 10_000);
 });

@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Concurrent first-run setup requests can no longer create more than one administrator account.
+- Signing out with secure cookies now actually expires the `__Host-` session cookie in the browser.
+- Audiobook titles with many multi-byte characters no longer fail at publication after a complete encode; generated filenames stay within the 255-byte filesystem limit including collision suffixes, and leading dots no longer create hidden files.
+- Cancelling a job while its sources are inspected or its output is prepared no longer starts a full encode; cancelled running jobs record their finish time and remove their private upload copy like cancelled waiting jobs.
+- Byte-range requests for `bytes=-0` are rejected as unsatisfiable instead of returning the first byte.
+- FFmpeg progress lines split across output chunks no longer make the progress bar jump backwards.
+- Upload size-limit failures return the intended 413 response, and uploads with a generic browser MIME type (for example some Opus or FLAC files) are accepted when the extension is allowlisted; ffprobe remains the authoritative check.
+- The browser no longer hangs on upload when a proxy answers with a non-JSON error, shows errors for every job action, offers a retry when the server is unreachable at startup, and returns to sign-in with a notice when the session has expired.
+- Unsupported files added in the upload view are reported instead of silently dropped.
+
+### Changed
+
+- Readiness now reports `storage: failed` with HTTP 503 when the data, upload, or result directories are not writable.
+- Vertiku shuts down gracefully on `SIGTERM`/`SIGINT`: live-update streams are closed, FFmpeg is stopped, the running job is requeued, and SQLite is closed before exit.
+- Live-update streams send keep-alive comments, survive transient update errors without crashing the process, and resolve queue positions with one query per snapshot instead of one query per waiting job.
+- The About view and `/api/manifest` report the version from `package.json` instead of a hard-coded value.
+- Job details offer an "All jobs" shortcut; the profile dialog closes with Escape, keeps keyboard focus inside, and returns focus to the profile button.
+
+### Security
+
+- Sign-in performs an Argon2id verification for unknown usernames as well, so response timing does not reveal which accounts exist.
+- Upload and input-library analysis failures no longer return ffprobe diagnostics or container paths to the browser; the detail is logged server-side and the user sees the affected filename only.
+- Successful first-run setup is recorded in the audit log.
+
 ## 0.5.2 - 2026-08-11
 
 ### Changed

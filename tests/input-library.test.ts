@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { filesForInputBook, resolveInputFolder, scanInputBooks } from '../src/server/input-library.js';
+import { InputFolderError, filesForInputBook, resolveInputFolder, scanInputBooks } from '../src/server/input-library.js';
 
 const directories: string[] = [];
 afterEach(() => directories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true })));
@@ -24,6 +24,14 @@ describe('mounted input library', () => {
   it('rejects traversal outside the configured input root', () => {
     const root = mkdtempSync(join(tmpdir(), 'vertiku-input-')); directories.push(root);
     expect(() => resolveInputFolder(root, '../outside')).toThrow(/escapes/);
+  });
+
+  it('reports a missing input folder with a browser-safe message that omits container paths', () => {
+    const root = mkdtempSync(join(tmpdir(), 'vertiku-input-')); directories.push(root);
+    let caught: unknown;
+    try { filesForInputBook(root, 'Removed Book'); } catch (error) { caught = error; }
+    expect(caught).toBeInstanceOf(InputFolderError);
+    expect((caught as Error).message).not.toContain(root);
   });
 
   it('creates a fast change fingerprint and flags gaps in numbered chapter files', () => {

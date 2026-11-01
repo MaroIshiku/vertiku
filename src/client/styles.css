@@ -28,6 +28,7 @@ button, .button { min-height: var(--touch-target-min); }
 .message { padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); }
 .message.error { color: var(--color-on-danger-container); background: var(--color-danger-container); }
 .message.success { color: var(--color-on-success-container); background: var(--color-success-container); }
+.message.info { color: var(--color-on-info-container); background: var(--color-info-container); }
 .recovery-panel { inline-size: 100%; margin-block-start: var(--space-5); padding-block-start: var(--space-5); border-block-start: 1px solid var(--color-outline); text-align: start; }
 .recovery-panel h2 { margin: var(--space-1) 0 var(--space-2); font-size: var(--type-title-large-size); }
 .recovery-panel > p:not(.eyebrow) { margin: 0; color: var(--color-on-surface-muted); line-height: var(--type-body-medium-line); }

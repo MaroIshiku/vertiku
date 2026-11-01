@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, realpathSync, statfsSync, statSync } from 'node:fs';
+import { accessSync, constants as fsConstants, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statfsSync, statSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -12,17 +12,22 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { bookMetadataFromFolderName, chapterTitlesFromFilenames, naturalSort, safeDownloadName } from '../domain/audiobook.js';
+import { AUDIO_EXTENSIONS, COVER_EXTENSIONS, bookMetadataFromFolderName, chapterTitlesFromFilenames, naturalSort, safeDownloadName } from '../domain/audiobook.js';
 import { openDatabase } from './database.js';
 import { buildForecastModel, estimateJobRemainingMs, type ForecastSample } from './forecast.js';
 import { convertToM4b, inspectAudio, probeAudio, type AudioInspection, type EmbeddedMetadata } from './ffmpeg.js';
-import { filesForInputBook, scanInputBooks } from './input-library.js';
+import { InputFolderError, filesForInputBook, scanInputBooks } from './input-library.js';
 import { createOutputWorkingPath, discardOutputWorkingPath, publishOutputWorkingPath } from './output-library.js';
 import { createWorkQueue } from './work-queue.js';
 
 const SESSION_HOURS = 8;
-const AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus']);
-const COVER_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+const EVENT_INTERVAL_MS = 750;
+const EVENT_KEEPALIVE_MS = 15_000;
+const ARGON2_OPTIONS = { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 } as const;
+const APP_VERSION = (() => {
+  try { return (JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version?: string }).version ?? 'development'; }
+  catch { return 'development'; }
+})();
 const loginSchema = z.object({ username: z.string().trim().min(1).max(100), password: z.string().min(12).max(1024) });
 const setupSchema = loginSchema.extend({ setupSecret: z.string().min(1).max(2048) });
 const passwordResetSchema = z.object({ username: z.string().trim().min(1).max(100), setupSecret: z.string().min(1).max(2048), newPassword: z.string().min(12).max(1024) });
@@ -109,6 +114,18 @@ class JobFailure extends Error {
   constructor(public readonly code: string, message: string, public readonly retryable: boolean) { super(message); }
 }
 
+/** An error whose message is safe and useful to show in the browser; every other error is logged and replaced by a generic message. */
+class UserFacingError extends Error {}
+
+const MULTIPART_LIMIT_MESSAGES: Record<string, { status: number; code: string; message: string }> = {
+  FST_REQ_FILE_TOO_LARGE: { status: 413, code: 'UPLOAD_TOO_LARGE', message: 'One of the selected files exceeds the configured upload limit.' },
+  FST_FILES_LIMIT: { status: 400, code: 'UPLOAD_TOO_MANY_FILES', message: 'Select at most 500 audio files and one cover image.' },
+  FST_PARTS_LIMIT: { status: 400, code: 'UPLOAD_TOO_MANY_FILES', message: 'Select at most 500 audio files and one cover image.' }
+};
+const errorCode = (error: unknown) => error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
+const isUserFacing = (error: unknown): error is Error => error instanceof UserFacingError || error instanceof InputFolderError;
+const acceptsAudioMime = (mimetype: string) => mimetype.startsWith('audio/') || mimetype === '' || mimetype === 'application/octet-stream';
+
 export async function buildApp(options: AppOptions) {
   const dataDir = resolve(options.dataDir ?? dirname(options.databasePath));
   const uploadsDir = join(dataDir, 'uploads');
@@ -142,6 +159,16 @@ export async function buildApp(options: AppOptions) {
     }
   }
   const cookieName = options.cookieSecure ? '__Host-vertiku_session' : 'vertiku_session';
+  // Clearing a __Host- cookie only works when the same Secure/Path attributes are repeated.
+  const cookieOptions = { path: '/', httpOnly: true, secure: options.cookieSecure, sameSite: 'strict' as const };
+  // Unknown usernames still pay the Argon2 verification cost, so sign-in timing does not reveal which accounts exist.
+  let dummyPasswordHash: Promise<string> | undefined;
+  const verifyAgainstDummy = async (password: string) => {
+    dummyPasswordHash ??= argon2.hash(randomBytes(32).toString('base64url'), ARGON2_OPTIONS);
+    await argon2.verify(await dummyPasswordHash, password).catch(() => false);
+    return false;
+  };
+  const eventStreams = new Set<() => void>();
   const children = new Map<string, ChildProcessWithoutNullStreams>();
   let shuttingDown = false;
   let passwordResetAvailable = options.passwordResetEnabled === true;
@@ -192,6 +219,52 @@ export async function buildApp(options: AppOptions) {
     return session;
   }
 
+  function clientError(request: FastifyRequest, error: unknown, fallback: string) {
+    if (isUserFacing(error)) return error.message;
+    request.log.warn({ err: error }, 'Request input could not be processed');
+    return fallback;
+  }
+
+  async function inspectNamedSource(request: FastifyRequest, path: string, displayName: string) {
+    try { return await inspectSource(path); }
+    catch (error) {
+      request.log.warn({ err: error }, 'Audio source could not be analyzed');
+      throw new UserFacingError(`Audio could not be read: ${displayName}`);
+    }
+  }
+
+  function jobIsCancelled(jobId: string) {
+    return (sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(jobId) as { status: string } | undefined)?.status === 'cancelled';
+  }
+
+  function queuePositions() {
+    const rows = sqlite.prepare("SELECT id FROM jobs WHERE status = 'queued' ORDER BY created_at, id").all() as Array<{ id: string }>;
+    return new Map(rows.map((row, index) => [row.id, index + 1]));
+  }
+
+  function streamEvents(request: FastifyRequest, reply: FastifyReply, session: Session, tick: (write: (event: string, data: string) => void) => boolean | void) {
+    reply.hijack();
+    reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    let lastWrite = Date.now();
+    const write = (event: string, data: string) => { reply.raw.write(`event: ${event}\ndata: ${data}\n\n`); lastWrite = Date.now(); };
+    const close = () => {
+      clearInterval(timer); eventStreams.delete(close);
+      if (!reply.raw.writableEnded) reply.raw.end();
+    };
+    const run = () => {
+      if (!sessionIsActive(session)) { close(); return; }
+      try { if (tick(write) === true) { close(); return; } }
+      catch (error) { request.log.error({ err: error }, 'Event stream update failed'); close(); return; }
+      // A comment line keeps idle proxies from dropping a quiet stream.
+      if (Date.now() - lastWrite >= EVENT_KEEPALIVE_MS) { reply.raw.write(': keep-alive\n\n'); lastWrite = Date.now(); }
+    };
+    const timer = setInterval(run, EVENT_INTERVAL_MS);
+    eventStreams.add(close);
+    request.raw.on('close', close);
+    run();
+    return reply;
+  }
+
   function forecastModel(ownerId: number, running?: JobRow, now = Date.now()) {
     const samples = sqlite.prepare('SELECT source_bytes, source_duration_ms, processing_ms FROM conversion_samples WHERE owner_id = ? ORDER BY created_at DESC LIMIT 50').all(ownerId) as ForecastSample[];
     return buildForecastModel(samples, running, now);
@@ -229,8 +302,8 @@ export async function buildApp(options: AppOptions) {
     return estimateJobRemainingMs(row, model, now);
   }
 
-  function publicJob(row: JobRow, model = forecastModel(row.owner_id, row.status === 'running' ? row : undefined)) {
-    const position = row.status === 'queued' ? Number((sqlite.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status = 'queued' AND (created_at < ? OR (created_at = ? AND id <= ?))").get(row.created_at, row.created_at, row.id) as { count: number }).count) : undefined;
+  function publicJob(row: JobRow, model = forecastModel(row.owner_id, row.status === 'running' ? row : undefined), positions?: Map<string, number>) {
+    const position = row.status !== 'queued' ? undefined : positions ? positions.get(row.id) : Number((sqlite.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status = 'queued' AND (created_at < ? OR (created_at = ? AND id <= ?))").get(row.created_at, row.created_at, row.id) as { count: number }).count);
     const phase = row.status === 'completed' ? 'completed' : row.phase;
     const remainingMs = row.status === 'running' ? estimatedRemainingMs(row, model) : 0;
     return { id: row.id, status: row.status, phase, progress: row.progress, queuePosition: position, title: row.title, destination: row.destination, outputName: row.export_path ? basename(row.export_path) : undefined, error: row.error_message ? { code: row.error_code, message: row.error_message, retryable: Boolean(row.retryable) } : undefined, downloadReady: row.status === 'completed' && row.destination === 'download', mediaReady: row.status === 'completed' && Boolean(row.output_path && existsSync(row.output_path)), retryable: row.status === 'failed' && Boolean(row.retryable), retryOf: row.retry_of ?? undefined, sourceDurationMs: row.source_duration_ms || row.estimated_duration_ms, estimatedOutputBytes: row.estimated_output_bytes, estimatedRemainingSeconds: remainingMs ? Math.max(1, Math.round(remainingMs / 1000)) : undefined, estimatedFinishAt: remainingMs ? new Date(Date.now() + remainingMs).toISOString() : undefined, estimateConfidence: model.confidence, createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString() };
@@ -246,6 +319,15 @@ export async function buildApp(options: AppOptions) {
     const queuedRemainingMs = queued.reduce((sum, row) => sum + estimatedRemainingMs(row, model, now), 0);
     const remainingMs = currentRemainingMs + queuedRemainingMs;
     return { remainingJobs: rows.length, queuedJobs: queued.length, queuedSourceBytes: queued.reduce((sum, row) => sum + row.source_bytes, 0), estimatedQueuedSeconds: Math.max(0, Math.round(queuedRemainingMs / 1000)), estimatedRemainingSeconds: Math.max(0, Math.round(remainingMs / 1000)), estimatedFinishAt: rows.length ? new Date(now + remainingMs).toISOString() : undefined, currentJobId: running?.id, currentJobEstimatedRemainingSeconds: running ? Math.max(1, Math.round(currentRemainingMs / 1000)) : undefined, currentJobEstimatedFinishAt: running ? new Date(now + currentRemainingMs).toISOString() : undefined, confidence: model.confidence, forecastBasis: model.basis, forecastSampleCount: model.sampleCount };
+  }
+
+  /** One consistent jobs-overview snapshot: queue positions are resolved with a single query instead of one per waiting job. */
+  function jobsSnapshot(ownerId: number) {
+    const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 250').all(ownerId) as JobRow[];
+    const running = rows.find((row) => row.status === 'running');
+    const model = forecastModel(ownerId, running);
+    const positions = rows.some((row) => row.status === 'queued') ? queuePositions() : new Map<string, number>();
+    return { jobs: rows.map((row) => publicJob(row, model, positions)), queue: queueSummary(ownerId) };
   }
 
   async function cleanupUploadedDraft(draftId: string) {
@@ -285,7 +367,7 @@ export async function buildApp(options: AppOptions) {
         if (index === 0) firstInspection = inspection;
         row.duration_ms = inspection.durationMs;
         sqlite.prepare('UPDATE draft_sources SET duration_ms = ? WHERE id = ?').run(inspection.durationMs, row.id);
-        if ((sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(job.id) as { status: string } | undefined)?.status === 'cancelled') {
+        if (jobIsCancelled(job.id)) {
           if (workingPath) await discardOutputWorkingPath(workingPath);
           await cleanupUploadedDraft(job.draft_id);
           return;
@@ -314,6 +396,12 @@ export async function buildApp(options: AppOptions) {
       } catch (error) { if (error instanceof JobFailure) throw error; }
       sqlite.prepare('UPDATE jobs SET output_path = ?, updated_at = ? WHERE id = ?').run(workingPath, Date.now(), job.id);
       sqlite.prepare("UPDATE jobs SET phase = 'encoding_audio', progress = 10, updated_at = ? WHERE id = ? AND status = 'running'").run(Date.now(), job.id);
+      // A cancellation during inspection or preparation must not start a full encode that would only be discarded.
+      if (jobIsCancelled(job.id)) {
+        await discardOutputWorkingPath(workingPath);
+        await cleanupUploadedDraft(job.draft_id);
+        return;
+      }
       const coverPath = availableCoverPath(draft.cover_path);
       if (draft.cover_path && !coverPath) app.log.warn({ jobId: job.id, jobRef: job.id.slice(0, 8) }, 'Optional audiobook cover was unavailable; continuing without it');
       await (options.convert ?? convertToM4b)({
@@ -326,8 +414,7 @@ export async function buildApp(options: AppOptions) {
         onChild: (child) => children.set(job.id, child)
       });
       sqlite.prepare("UPDATE jobs SET phase = 'validating_output', progress = 96, updated_at = ? WHERE id = ? AND status = 'running'").run(Date.now(), job.id);
-      const status = (sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(job.id) as { status: string } | undefined)?.status;
-      if (status === 'cancelled') {
+      if (jobIsCancelled(job.id)) {
         if (workingPath) await discardOutputWorkingPath(workingPath);
         await cleanupUploadedDraft(job.draft_id);
         return;
@@ -347,8 +434,10 @@ export async function buildApp(options: AppOptions) {
         sqlite.prepare("UPDATE jobs SET status = 'queued', phase = 'queued', progress = 0, error_code = NULL, error_message = NULL, updated_at = ? WHERE id = ? AND status = 'running'").run(Date.now(), job.id);
         return;
       }
-      const cancelled = (sqlite.prepare('SELECT status FROM jobs WHERE id = ?').get(job.id) as { status: string } | undefined)?.status === 'cancelled';
+      const cancelled = jobIsCancelled(job.id);
       if (workingPath) await discardOutputWorkingPath(workingPath);
+      // Cancelled uploads are removed like cancelled queued uploads; failed uploads stay available for retry.
+      if (cancelled) await cleanupUploadedDraft(job.draft_id).catch((cleanupError: unknown) => app.log.warn({ err: cleanupError, jobId: job.id }, 'Cancelled upload cleanup could not be completed'));
       if (!cancelled) {
         const diagnostic = error instanceof Error ? error : new Error(String(error));
         const jobRef = job.id.slice(0, 8);
@@ -394,9 +483,13 @@ export async function buildApp(options: AppOptions) {
   app.get('/health', async () => ({ status: 'ok' }));
   app.get('/health/live', async () => ({ status: 'ok' }));
   app.get('/health/ready', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (_request, reply) => {
-    try { sqlite.prepare('SELECT 1').get(); return { status: 'ready', database: 'ok', storage: 'ok', input: existsSync(inputDir) ? 'mounted' : 'not-mounted', output: existsSync(outputDir) ? 'mounted' : 'not-mounted' }; } catch { return reply.code(503).send({ status: 'not-ready' }); }
+    let database: 'ok' | 'failed' = 'ok'; let storage: 'ok' | 'failed' = 'ok';
+    try { sqlite.prepare('SELECT 1').get(); } catch { database = 'failed'; }
+    try { for (const directory of [dataDir, uploadsDir, resultsDir]) accessSync(directory, fsConstants.R_OK | fsConstants.W_OK); } catch { storage = 'failed'; }
+    if (database !== 'ok' || storage !== 'ok') return reply.code(503).send({ status: 'not-ready', database, storage });
+    return { status: 'ready', database, storage, input: existsSync(inputDir) ? 'mounted' : 'not-mounted', output: existsSync(outputDir) ? 'mounted' : 'not-mounted' };
   });
-  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION ?? '0.5.2', buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
+  app.get('/api/manifest', async () => ({ id: 'vertiku', name: 'Vertiku', version: process.env.APP_VERSION || APP_VERSION, buildDate: process.env.BUILD_DATE ?? 'development', gitSha: process.env.GIT_SHA ?? 'development' }));
   app.get('/api/setup/status', async () => ({ required: Number((sqlite.prepare('SELECT COUNT(*) AS count FROM accounts').get() as { count: number }).count) === 0, passwordResetEnabled: passwordResetAvailable }));
 
   app.post('/api/setup', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
@@ -405,20 +498,23 @@ export async function buildApp(options: AppOptions) {
     if (!input.success) return reply.code(400).send({ code: 'VALIDATION_FAILED', message: 'Enter a username, a password of at least 12 characters, and the setup secret.', requestId: request.id });
     if (!options.setupSecret) return reply.code(503).send({ code: 'SETUP_SECRET_MISSING', message: 'The server administrator must configure ISHIKU_SETUP_SECRET.', requestId: request.id });
     if (!copiedSecretMatches(input.data.setupSecret, options.setupSecret) || copiedSecretMatches(input.data.password, options.setupSecret)) return reply.code(403).send({ code: 'SETUP_DENIED', message: 'Setup could not be authorized.', requestId: request.id });
-    const passwordHash = await argon2.hash(input.data.password, { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 });
-    sqlite.prepare("INSERT INTO accounts (username, password_hash, role) VALUES (?, ?, 'admin')").run(input.data.username, passwordHash);
+    const passwordHash = await argon2.hash(input.data.password, ARGON2_OPTIONS);
+    // Re-check inside one statement: concurrent setup requests may all pass the first check while hashing.
+    const created = sqlite.prepare("INSERT INTO accounts (username, password_hash, role) SELECT ?, ?, 'admin' WHERE NOT EXISTS (SELECT 1 FROM accounts)").run(input.data.username, passwordHash);
+    if (Number(created.changes) !== 1) return reply.code(409).send({ code: 'SETUP_CLOSED', message: 'Initial setup is already complete.', requestId: request.id });
+    audit('setup', Number(created.lastInsertRowid), 'success', request.id);
     return reply.code(201).send({ created: true });
   });
 
   app.post('/api/session', { config: { rateLimit: { max: 8, timeWindow: '5 minutes' } } }, async (request, reply) => {
     const input = loginSchema.safeParse(request.body);
     const account = input.success ? accountByUsername(input.data.username) : undefined;
-    const valid = account && input.success ? await argon2.verify(account.password_hash, input.data.password) : false;
+    const valid = !input.success ? false : account ? await argon2.verify(account.password_hash, input.data.password).catch(() => false) : await verifyAgainstDummy(input.data.password);
     if (!valid || !account) { audit('sign_in', account?.id ?? null, 'failure', request.id); return reply.code(401).send({ code: 'AUTH_INVALID', message: 'Invalid credentials.', requestId: request.id }); }
     const token = randomBytes(32).toString('base64url'); const csrf = randomBytes(24).toString('base64url'); const now = Date.now();
     sqlite.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now);
     sqlite.prepare('INSERT INTO sessions (token_hash, account_id, csrf, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)').run(hashToken(token), account.id, csrf, now, now, now + SESSION_HOURS * 60 * 60 * 1000);
-    reply.setCookie(cookieName, token, { path: '/', httpOnly: true, secure: options.cookieSecure, sameSite: 'strict', maxAge: SESSION_HOURS * 60 * 60 });
+    reply.setCookie(cookieName, token, { ...cookieOptions, maxAge: SESSION_HOURS * 60 * 60 });
     audit('sign_in', account.id, 'success', request.id);
     return { csrf, user: { username: account.username, role: account.role } };
   });
@@ -434,7 +530,7 @@ export async function buildApp(options: AppOptions) {
       audit('password_reset', account?.id ?? null, 'failure', request.id);
       return reply.code(403).send({ code: 'PASSWORD_RESET_DENIED', message: 'Password recovery could not be authorized.', requestId: request.id });
     }
-    const passwordHash = await argon2.hash(input.data.newPassword, { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 });
+    const passwordHash = await argon2.hash(input.data.newPassword, ARGON2_OPTIONS);
     sqlite.exec('BEGIN IMMEDIATE');
     try {
       sqlite.prepare('UPDATE accounts SET password_hash = ? WHERE id = ?').run(passwordHash, account.id);
@@ -446,7 +542,7 @@ export async function buildApp(options: AppOptions) {
     return reply.code(204).send();
   });
   app.get('/api/session', async (request, reply) => { const session = requireSession(request, reply); return session ? { csrf: session.csrf, user: { username: session.username, role: session.role } } : reply; });
-  app.delete('/api/session', async (request, reply) => { const session = requireSession(request, reply, true); if (!session) return reply; sqlite.prepare('DELETE FROM sessions WHERE token_hash = ?').run(session.token_hash); reply.clearCookie(cookieName, { path: '/' }); return reply.code(204).send(); });
+  app.delete('/api/session', async (request, reply) => { const session = requireSession(request, reply, true); if (!session) return reply; sqlite.prepare('DELETE FROM sessions WHERE token_hash = ?').run(session.token_hash); reply.clearCookie(cookieName, cookieOptions); return reply.code(204).send(); });
 
   app.post('/api/drafts', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
     const session = requireSession(request, reply, true); if (!session) return reply;
@@ -458,16 +554,17 @@ export async function buildApp(options: AppOptions) {
         if (part.type !== 'file') continue;
         const originalName = part.filename ?? 'unnamed'; const extension = extname(originalName).toLowerCase();
         if (part.fieldname === 'cover') {
-          if (!COVER_EXTENSIONS.has(extension) || !part.mimetype.startsWith('image/')) throw new Error('Unsupported cover image.');
+          if (!COVER_EXTENSIONS.has(extension) || !part.mimetype.startsWith('image/')) throw new UserFacingError('Unsupported cover image.');
           coverPath = join(draftDir, `cover${extension}`); await pipeline(part.file, createWriteStream(coverPath, { mode: 0o600 }));
           continue;
         }
-        if (part.fieldname !== 'files' || !AUDIO_EXTENSIONS.has(extension) || !part.mimetype.startsWith('audio/')) throw new Error(`Unsupported audio file: ${originalName}`);
+        // Browsers report no or a generic MIME type for some formats (for example Opus or FLAC); ffprobe below is the authoritative check.
+        if (part.fieldname !== 'files' || !AUDIO_EXTENSIONS.has(extension) || !acceptsAudioMime(part.mimetype)) throw new UserFacingError(`Unsupported audio file: ${originalName}`);
         const id = randomUUID(); const storagePath = join(draftDir, `${id}${extension}`); await pipeline(part.file, createWriteStream(storagePath, { mode: 0o600 }));
-        const inspection = await inspectSource(storagePath); const stat = statSync(storagePath);
+        const inspection = await inspectNamedSource(request, storagePath, originalName); const stat = statSync(storagePath);
         uploaded.push({ id, originalName, storagePath, inspection, sizeBytes: stat.size, modifiedAt: Math.trunc(stat.mtimeMs) });
       }
-      if (uploaded.length === 0) throw new Error('Select at least one supported audio file.');
+      if (uploaded.length === 0) throw new UserFacingError('Select at least one supported audio file.');
       const sorted = naturalSort(uploaded, (source) => source.originalName);
       sqlite.exec('BEGIN IMMEDIATE');
       try {
@@ -481,7 +578,9 @@ export async function buildApp(options: AppOptions) {
       return reply.code(201).send({ id: draftId, cover: Boolean(coverPath || sorted[0]?.inspection.embeddedCover), suggestedMetadata: embedded, sources: sorted.map((source, index) => ({ id: source.id, filename: source.originalName, title: titles[index], durationMs: source.inspection.durationMs, duration: formatDuration(source.inspection.durationMs) })) });
     } catch (error) {
       await rm(draftDir, { recursive: true, force: true });
-      return reply.code(400).send({ code: 'INVALID_FILE', message: error instanceof Error ? error.message : 'The files could not be analyzed.', requestId: request.id });
+      const limit = MULTIPART_LIMIT_MESSAGES[errorCode(error) ?? ''];
+      if (limit) return reply.code(limit.status).send({ code: limit.code, message: limit.message, requestId: request.id });
+      return reply.code(400).send({ code: 'INVALID_FILE', message: clientError(request, error, 'The files could not be analyzed.'), requestId: request.id });
     }
   });
 
@@ -512,7 +611,7 @@ export async function buildApp(options: AppOptions) {
       if (!selected.files.length) return reply.code(404).send({ code: 'INPUT_BOOK_EMPTY', message: 'No supported audio files were found in this folder.', requestId: request.id });
       if (selected.files.length > 500) return reply.code(400).send({ code: 'INPUT_BOOK_TOO_LARGE', message: 'An input folder may contain at most 500 audio files.', requestId: request.id });
       const analyzed: Array<{ id: string; originalName: string; storagePath: string; inspection: AudioInspection; sizeBytes: number; modifiedAt: number }> = [];
-      for (const file of selected.files) analyzed.push({ id: randomUUID(), originalName: file.name, storagePath: file.path, inspection: await inspectSource(file.path), sizeBytes: file.sizeBytes, modifiedAt: file.modifiedAt });
+      for (const file of selected.files) analyzed.push({ id: randomUUID(), originalName: file.name, storagePath: file.path, inspection: await inspectNamedSource(request, file.path, file.name), sizeBytes: file.sizeBytes, modifiedAt: file.modifiedAt });
       const draftId = randomUUID(); sqlite.exec('BEGIN IMMEDIATE');
       try {
         sqlite.prepare('INSERT INTO drafts (id, owner_id, cover_path, created_at) VALUES (?, ?, ?, ?)').run(draftId, session.account_id, selected.coverPath ?? null, Date.now());
@@ -523,7 +622,7 @@ export async function buildApp(options: AppOptions) {
       const titles = chapterTitlesFromFilenames(analyzed.map((source) => source.originalName), suggested.title);
       const embedded = analyzed[0]?.inspection.metadata ?? emptyEmbeddedMetadata();
       return reply.code(201).send({ id: draftId, cover: Boolean(selected.coverPath || analyzed[0]?.inspection.embeddedCover), suggestedTitle: embedded.title || suggested.title, suggestedAuthor: embedded.author || suggested.author, suggestedMetadata: embedded, sourceFingerprint: selected.fingerprint, sourceBytes: selected.sourceBytes, sources: analyzed.map((source, index) => ({ id: source.id, filename: source.originalName, title: titles[index], durationMs: source.inspection.durationMs, duration: formatDuration(source.inspection.durationMs) })) });
-    } catch (error) { return reply.code(400).send({ code: 'INPUT_BOOK_INVALID', message: error instanceof Error ? error.message : 'The input folder could not be analyzed.', requestId: request.id }); }
+    } catch (error) { return reply.code(400).send({ code: 'INPUT_BOOK_INVALID', message: clientError(request, error, 'The input folder could not be analyzed.'), requestId: request.id }); }
   });
 
   app.post('/api/jobs/from-input/batch', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
@@ -534,11 +633,11 @@ export async function buildApp(options: AppOptions) {
     try {
       const prepared = input.data.items.map((item, batchIndex) => {
         const selected = filesForInputBook(inputDir, item.folderId);
-        if (!selected.files.length || selected.files.length > 500) throw new Error('Each selected folder must contain between 1 and 500 supported audio files.');
-        if (item.fingerprint && item.fingerprint !== selected.fingerprint) throw new Error(`The source files changed in ${item.folderId}. Refresh the input library and review it again.`);
-        if (sqlite.prepare("SELECT id FROM jobs WHERE owner_id = ? AND source_fingerprint = ? AND status IN ('queued','running') LIMIT 1").get(session.account_id, selected.fingerprint)) throw new Error(`The audiobook in ${item.folderId} is already queued or running.`);
+        if (!selected.files.length || selected.files.length > 500) throw new UserFacingError('Each selected folder must contain between 1 and 500 supported audio files.');
+        if (item.fingerprint && item.fingerprint !== selected.fingerprint) throw new UserFacingError(`The source files changed in ${item.folderId}. Refresh the input library and review it again.`);
+        if (sqlite.prepare("SELECT id FROM jobs WHERE owner_id = ? AND source_fingerprint = ? AND status IN ('queued','running') LIMIT 1").get(session.account_id, selected.fingerprint)) throw new UserFacingError(`The audiobook in ${item.folderId} is already queued or running.`);
         const submitted = new Map(item.chapters.map((chapter) => [chapter.filename, chapter.title]));
-        if (submitted.size !== selected.files.length || item.chapters.length !== selected.files.length || selected.files.some((file) => !submitted.has(file.name))) throw new Error(`The chapter files changed in ${item.folderId}. Refresh the input library and review it again.`);
+        if (submitted.size !== selected.files.length || item.chapters.length !== selected.files.length || selected.files.some((file) => !submitted.has(file.name))) throw new UserFacingError(`The chapter files changed in ${item.folderId}. Refresh the input library and review it again.`);
         const draftId = randomUUID(); const jobId = randomUUID(); const now = Date.now() + batchIndex;
         const sources = selected.files.map((file, index) => ({ id: randomUUID(), originalName: file.name, storagePath: file.path, sizeBytes: file.sizeBytes, modifiedAt: file.modifiedAt, title: submitted.get(file.name)!, sortOrder: index }));
         const metadata: StoredMetadata = { title: '', author: '', narrator: '', year: '', genre: '', description: '' };
@@ -562,7 +661,7 @@ export async function buildApp(options: AppOptions) {
       workQueue.wake();
       const jobs = prepared.map((entry) => publicJob(sqlite.prepare('SELECT * FROM jobs WHERE id = ?').get(entry.jobId) as JobRow));
       return reply.code(202).send({ accepted: jobs.length, jobs });
-    } catch (error) { return reply.code(400).send({ code: 'BATCH_INVALID', message: error instanceof Error ? error.message : 'The batch could not be queued.', requestId: request.id }); }
+    } catch (error) { return reply.code(400).send({ code: 'BATCH_INVALID', message: clientError(request, error, 'The batch could not be queued.'), requestId: request.id }); }
   });
 
   app.post('/api/jobs', { config: { rateLimit: { max: 20, timeWindow: '5 minutes' } } }, async (request, reply) => {
@@ -611,21 +710,24 @@ export async function buildApp(options: AppOptions) {
     return sqlite.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as JobRow;
   }
 
-  app.get('/api/jobs', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const running = rows.find((row) => row.status === 'running'); const model = forecastModel(session.account_id, running); return { jobs: rows.map((row) => publicJob(row, model)), queue: queueSummary(session.account_id) }; });
+  app.get('/api/jobs', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; return jobsSnapshot(session.account_id); });
   app.get('/api/jobs/events', async (request, reply) => {
     const session = requireSession(request, reply); if (!session) return reply;
-    reply.hijack(); reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
     let previous = '';
-    const send = () => { if (!sessionIsActive(session)) { clearInterval(timer); reply.raw.end(); return; } const rows = sqlite.prepare('SELECT * FROM jobs WHERE owner_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 250').all(session.account_id) as JobRow[]; const running = rows.find((row) => row.status === 'running'); const model = forecastModel(session.account_id, running); const data = JSON.stringify({ jobs: rows.map((row) => publicJob(row, model)), queue: queueSummary(session.account_id) }); if (data !== previous) { previous = data; reply.raw.write(`event: jobs\ndata: ${data}\n\n`); } };
-    const timer = setInterval(send, 750); send(); request.raw.on('close', () => clearInterval(timer)); return reply;
+    return streamEvents(request, reply, session, (write) => { const data = JSON.stringify(jobsSnapshot(session.account_id)); if (data !== previous) { previous = data; write('jobs', data); } });
   });
   app.get('/api/jobs/:id', async (request, reply) => { const session = requireSession(request, reply); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ? AND archived_at IS NULL').get(id, session.account_id) as JobRow | undefined; return row ? publicJob(row) : reply.code(404).send({ code: 'JOB_NOT_FOUND', message: 'The job was not found.', requestId: request.id }); });
   app.get('/api/jobs/:id/events', async (request, reply) => {
     const session = requireSession(request, reply); if (!session) return reply;
     const { id } = request.params as { id: string }; const exists = sqlite.prepare('SELECT id FROM jobs WHERE id = ? AND owner_id = ?').get(id, session.account_id); if (!exists) return reply.code(404).send({ code: 'JOB_NOT_FOUND', message: 'The job was not found.', requestId: request.id });
-    reply.hijack(); reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
-    const send = () => { if (!sessionIsActive(session)) { clearInterval(timer); reply.raw.end(); return; } const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ?').get(id, session.account_id) as JobRow | undefined; if (!row) return; reply.raw.write(`event: job\ndata: ${JSON.stringify(publicJob(row))}\n\n`); if (['completed', 'failed', 'cancelled'].includes(row.status)) { clearInterval(timer); reply.raw.end(); } };
-    const timer = setInterval(send, 750); send(); request.raw.on('close', () => clearInterval(timer)); return reply;
+    let previous = '';
+    return streamEvents(request, reply, session, (write) => {
+      const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ?').get(id, session.account_id) as JobRow | undefined;
+      if (!row) return true;
+      const data = JSON.stringify(publicJob(row));
+      if (data !== previous) { previous = data; write('job', data); }
+      return ['completed', 'failed', 'cancelled'].includes(row.status);
+    });
   });
   app.post('/api/jobs/cancel-queued', async (request, reply) => {
     const session = requireSession(request, reply, true); if (!session) return reply;
@@ -656,7 +758,7 @@ export async function buildApp(options: AppOptions) {
     if (Number(result.changes) === 0) return reply.code(409).send({ code: 'JOB_NOT_CLEARABLE', message: 'Only completed, failed, or cancelled jobs can be cleared.', requestId: request.id });
     return reply.send({ cleared: 1 });
   });
-  app.post('/api/jobs/:id/cancel', async (request, reply) => { const session = requireSession(request, reply, true); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare("SELECT id, draft_id, status, output_path FROM jobs WHERE id = ? AND owner_id = ? AND status IN ('queued','running')").get(id, session.account_id) as { id: string; draft_id: string; status: string; output_path: string | null } | undefined; if (!row) return reply.code(409).send({ code: 'JOB_NOT_CANCELLABLE', message: 'This job cannot be cancelled.', requestId: request.id }); sqlite.prepare("UPDATE jobs SET status = 'cancelled', error_code = NULL, error_message = NULL, updated_at = ? WHERE id = ?").run(Date.now(), id); if (row.status === 'queued') { if (row.output_path) await discardOutputWorkingPath(row.output_path); await cleanupUploadedDraft(row.draft_id); } children.get(id)?.kill('SIGTERM'); workQueue.wake(); return reply.code(202).send({ id, status: 'cancelled' }); });
+  app.post('/api/jobs/:id/cancel', async (request, reply) => { const session = requireSession(request, reply, true); if (!session) return reply; const { id } = request.params as { id: string }; const row = sqlite.prepare("SELECT id, draft_id, status, output_path FROM jobs WHERE id = ? AND owner_id = ? AND status IN ('queued','running')").get(id, session.account_id) as { id: string; draft_id: string; status: string; output_path: string | null } | undefined; if (!row) return reply.code(409).send({ code: 'JOB_NOT_CANCELLABLE', message: 'This job cannot be cancelled.', requestId: request.id }); const cancelledAt = Date.now(); sqlite.prepare("UPDATE jobs SET status = 'cancelled', error_code = NULL, error_message = NULL, finished_at = ?, updated_at = ? WHERE id = ? AND status IN ('queued','running')").run(cancelledAt, cancelledAt, id); if (row.status === 'queued') { if (row.output_path) await discardOutputWorkingPath(row.output_path); await cleanupUploadedDraft(row.draft_id); } children.get(id)?.kill('SIGTERM'); workQueue.wake(); return reply.code(202).send({ id, status: 'cancelled' }); });
   app.post('/api/jobs/:id/retry', async (request, reply) => {
     const session = requireSession(request, reply, true); if (!session) return reply;
     const { id } = request.params as { id: string }; const row = sqlite.prepare('SELECT * FROM jobs WHERE id = ? AND owner_id = ? AND archived_at IS NULL').get(id, session.account_id) as JobRow | undefined;
@@ -682,8 +784,9 @@ export async function buildApp(options: AppOptions) {
     const match = /^bytes=(\d*)-(\d*)$/.exec(range);
     if (!match || (!match[1] && !match[2])) return reply.code(416).header('Content-Range', `bytes */${size}`).send();
     const suffix = !match[1] && match[2] ? Number(match[2]) : undefined;
-    const start = suffix ? Math.max(0, size - suffix) : Number(match[1]);
-    const end = suffix ? size - 1 : match[2] ? Number(match[2]) : size - 1;
+    if (suffix === 0) return reply.code(416).header('Content-Range', `bytes */${size}`).send();
+    const start = suffix !== undefined ? Math.max(0, size - suffix) : Number(match[1]);
+    const end = suffix !== undefined ? size - 1 : match[2] ? Number(match[2]) : size - 1;
     if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= size) return reply.code(416).header('Content-Range', `bytes */${size}`).send();
     const boundedEnd = Math.min(end, size - 1);
     reply.code(206).header('Content-Range', `bytes ${start}-${boundedEnd}/${size}`).header('Content-Length', boundedEnd - start + 1);
@@ -695,6 +798,8 @@ export async function buildApp(options: AppOptions) {
     await app.register(fastifyStatic, { root: staticRoot, wildcard: false });
   } else app.get('/', async () => ({ name: 'Vertiku', message: 'Build the client with npm run build.' }));
   workQueue.wake();
+  // Long-lived event streams would otherwise keep the HTTP server from closing during a container stop.
+  app.addHook('preClose', async () => { for (const close of [...eventStreams]) close(); });
   app.addHook('onClose', async () => { shuttingDown = true; for (const child of children.values()) child.kill('SIGTERM'); await workQueue.stop(); sqlite.close(); });
   return app;
 }
