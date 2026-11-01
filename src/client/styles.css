@@ -151,6 +151,8 @@ button, .button { min-height: var(--touch-target-min); }
 .destination-switch button { min-block-size: 76px; padding: var(--space-3); display: grid; align-content: center; gap: var(--space-1); border: 1px solid var(--color-outline); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-on-surface); text-align: start; }
 .destination-switch button[aria-pressed="true"] { border-color: transparent; background: var(--color-primary-container); color: var(--color-on-primary-container); }
 .destination-switch small { color: var(--color-on-surface-muted); }
+/* The muted surface tone falls below 4.5:1 on the selected container; inherit its on-container color instead. */
+.destination-switch button[aria-pressed="true"] small { color: inherit; }
 
 .job-card, .about-card { max-inline-size: 720px; margin-inline: auto; text-align: center; }
 .job-summary { text-align: center; }
