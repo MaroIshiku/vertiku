@@ -13,6 +13,8 @@ export type AppOptions = {
   maxConcurrentJobs?: number;
   passwordResetEnabled?: boolean;
   etaHistoryResetToken?: string;
+  /** Days after which abandoned upload drafts and unusable upload copies are removed (STOR-001). */
+  uploadRetentionDays?: number;
   convert?: typeof convertToM4b;
   probe?: typeof probeAudio;
   inspect?: typeof inspectAudio;

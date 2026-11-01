@@ -18,6 +18,7 @@ import { registerSystemRoutes } from './routes/system.js';
 import { hashToken } from './security.js';
 import { createSessionStore } from './sessions.js';
 import type { AppOptions, StoragePaths } from './types.js';
+import { DEFAULT_UPLOAD_RETENTION_DAYS, createUploadRetention } from './upload-retention.js';
 import { createWorkQueue } from './work-queue.js';
 
 export type { AppOptions } from './types.js';
@@ -96,11 +97,13 @@ export async function buildApp(options: AppOptions) {
   if (existsSync(join(staticRoot, 'index.html'))) await app.register(fastifyStatic, { root: staticRoot, wildcard: false });
   else app.get('/', async () => ({ name: 'Vertiku', message: 'Build the client with npm run build.' }));
 
+  const retention = createUploadRetention({ sqlite, uploadsDir: paths.uploadsDir, retentionDays: options.uploadRetentionDays ?? DEFAULT_UPLOAD_RETENTION_DAYS, log: app.log });
+  retention.start();
   workQueue.wake();
   app.addHook('preClose', async () => { events.closeAll(); });
   app.addHook('onClose', async () => {
     runner.beginShutdown();
-    await workQueue.stop();
+    await Promise.all([workQueue.stop(), retention.stop()]);
     sqlite.close();
   });
   return app;

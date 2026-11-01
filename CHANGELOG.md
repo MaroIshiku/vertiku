@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Private upload storage is now bounded: after `VERTIKU_UPLOAD_RETENTION_DAYS` (default 7, allowed 1–365) days, Vertiku removes uploads that never became a job, upload copies whose failed jobs were cleared from the overview, and upload directories left by interrupted uploads. Sources of waiting, running, or visible failed jobs, job history, browser-download results, `/input`, and `/output` are never touched (STOR-001).
+
 ### Fixed
 
 - Concurrent first-run setup requests can no longer create more than one administrator account.
@@ -13,6 +17,7 @@
 - Upload size-limit failures return the intended 413 response, and uploads with a generic browser MIME type (for example some Opus or FLAC files) are accepted when the extension is allowlisted; ffprobe remains the authoritative check.
 - The browser no longer hangs on upload when a proxy answers with a non-JSON error, shows errors for every job action, offers a retry when the server is unreachable at startup, and returns to sign-in with a notice when the session has expired.
 - Unsupported files added in the upload view are reported instead of silently dropped.
+- The hint text of the selected destination option now meets the WCAG AA contrast ratio.
 
 ### Changed
 
@@ -20,6 +25,9 @@
 - Vertiku shuts down gracefully on `SIGTERM`/`SIGINT`: live-update streams are closed, FFmpeg is stopped, the running job is requeued, and SQLite is closed before exit.
 - Live-update streams send keep-alive comments, survive transient update errors without crashing the process, and resolve queue positions with one query per snapshot instead of one query per waiting job.
 - The About view and `/api/manifest` report the version from `package.json` instead of a hard-coded value.
+- The server is split into route, session, conversion-runner, job-view, event-stream, and retention modules, and the client into one component per view; endpoints, responses, texts, and styling are unchanged.
+- The jobs overview shows "Loading jobs…" until its first update instead of briefly showing "No jobs yet".
+- Removed the stale `pnpm-lock.yaml` and placeholder `pnpm-workspace.yaml`; npm with `package-lock.json` is the only package manager.
 - Job details offer an "All jobs" shortcut; the profile dialog closes with Escape, keeps keyboard focus inside, and returns focus to the profile button.
 
 ### Security

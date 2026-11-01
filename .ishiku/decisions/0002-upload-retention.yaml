@@ -1,0 +1,19 @@
+schema_version: 1
+id: DEC-0002
+title: Bounded retention for private upload copies
+status: accepted
+date: 2026-11-01
+decision: >-
+  Remove private upload storage below /data/uploads after a configurable retention period
+  (VERTIKU_UPLOAD_RETENTION_DAYS, default 7 days, 1 to 365): drafts that never became a job,
+  upload copies whose jobs are all finished and that no visible failed attempt can retry, and
+  upload directories without a draft. The sweep runs at startup and every six hours.
+risk_class: C
+compatibility:
+  - Approved by the repository owner on 2026-11-01 after the review identified unbounded growth of /data/uploads.
+  - Upload copies of queued, running, or visible failed jobs are never removed, so retry keeps working until a failed job is cleared from the overview and the retention period has passed.
+  - Job history, durable forecast samples, browser-download results, /input, and /output are unaffected; failed jobs whose upload copy was removed are marked non-retryable.
+  - JOBS-003 clearing stays non-destructive at the time of clearing; STOR-001 records the later retention.
+rollback: >-
+  Set VERTIKU_UPLOAD_RETENTION_DAYS to 365 to effectively pause cleanup, or deploy the previous image.
+  Already removed upload copies cannot be restored; input-folder sources are never affected.

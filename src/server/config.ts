@@ -23,6 +23,7 @@ const schema = z.object({
   VERTIKU_COOKIE_SECURE: z.enum(['true', 'false']).default('false'),
   VERTIKU_PASSWORD_RESET: booleanString.default('false'),
   VERTIKU_ETA_HISTORY_RESET_TOKEN: z.string().trim().max(200).optional(),
+  VERTIKU_UPLOAD_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(7),
   FFMPEG_PATH: z.string().default('ffmpeg'),
   FFPROBE_PATH: z.string().default('ffprobe')
 });
@@ -44,6 +45,7 @@ export function loadConfig(environment = process.env) {
     cookieSecure: value.VERTIKU_COOKIE_SECURE === 'true',
     passwordResetEnabled: value.VERTIKU_PASSWORD_RESET === 'true',
     etaHistoryResetToken: value.VERTIKU_ETA_HISTORY_RESET_TOKEN,
+    uploadRetentionDays: value.VERTIKU_UPLOAD_RETENTION_DAYS,
     maxUploadBytes: value.VERTIKU_MAX_UPLOAD_GIB * 1024 ** 3,
     maxConcurrentJobs: value.VERTIKU_MAX_CONCURRENT_JOBS,
     ffmpegPath: value.FFMPEG_PATH,
