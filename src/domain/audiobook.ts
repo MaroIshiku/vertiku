@@ -9,6 +9,11 @@ export function naturalSort<T>(items: T[], name: (item: T) => string): T[] {
   return [...items].sort((left, right) => collator.compare(name(left), name(right)));
 }
 
+export function formatDuration(milliseconds: number): string {
+  const total = Math.round(milliseconds / 1000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
 export function chapterTitleFromFilename(filename: string): string {
   return basename(filename, extname(filename))
     .replace(/^[\s._-]*\d+[\s._-]*/u, '')

@@ -11,6 +11,7 @@ type ProbeResult = {
 
 export type EmbeddedMetadata = { title: string; author: string; narrator: string; year: string; genre: string; description: string };
 export type AudioInspection = { durationMs: number; metadata: EmbeddedMetadata; embeddedCover: boolean };
+export const emptyEmbeddedMetadata = (): EmbeddedMetadata => ({ title: '', author: '', narrator: '', year: '', genre: '', description: '' });
 
 function runJson(binary: string, args: string[]): Promise<ProbeResult> {
   return new Promise((resolvePromise, reject) => {
