@@ -31,7 +31,7 @@ importers:
         version: 0.45.1
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(zod@4.4.3)
+        version: 1.0.0-rc.4(zod@4.6.7)
       fastify:
         specifier: 5.11.2
         version: 5.11.2
@@ -48,8 +48,8 @@ importers:
         specifier: 4.23.8
         version: 4.23.8
       zod:
-        specifier: 4.4.3
-        version: 4.4.3
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@playwright/test':
         specifier: 1.62.1
@@ -1363,8 +1363,8 @@ packages:
     engines: {node: '>=8'}
     hasBin: true
 
-  zod@4.4.3:
-    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
 snapshots:
 
@@ -1802,9 +1802,9 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
-  drizzle-orm@1.0.0-rc.4(zod@4.4.3):
+  drizzle-orm@1.0.0-rc.4(zod@4.6.7):
     optionalDependencies:
-      zod: 4.4.3
+      zod: 4.6.7
 
   es-module-lexer@2.3.1: {}
 
@@ -2260,4 +2260,4 @@ snapshots:
       siginfo: 2.0.0
       stackback: 0.0.2
 
-  zod@4.4.3: {}
+  zod@4.6.7: {}
